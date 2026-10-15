@@ -67,3 +67,17 @@ app.addHook("onSend", async (_request, reply) => {
 app.get("/api/health", async () => ({ ok: true }));
 
 await app.listen({ host: "0.0.0.0", port });
+
+// Como o node é o PID 1 no container, SIGTERM sem handler é ignorado: o orquestrador espera o timeout e
+// mata com SIGKILL, cortando requisições no meio. Fechamos o servidor e saímos.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => {
+    app.close().then(
+      () => process.exit(0),
+      (error) => {
+        app.log.error(error);
+        process.exit(1);
+      }
+    );
+  });
+}

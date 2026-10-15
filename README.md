@@ -56,7 +56,10 @@ npm run dev               # http://localhost:3000
 `npm run dev` lê o `.env` da raiz e reinicia a cada alteração; `npm run start` roda o mesmo servidor sem
 `--watch`.
 
-## VPS
+## VPS com docker compose
+
+Este caminho é o do `docker-compose.yml` do repositório: o `app` + o `caddy` (proxy e HTTPS). Precisa das portas
+80 e 443 livres no servidor.
 
 1. Clone (ou copie) o repositório e crie o `.env` com `APPWRITE_ENDPOINT`, `APPWRITE_PROJECT_ID`,
    `APPWRITE_API_KEY` e `DOMAIN` - e os ids de recurso, se trocar os padrões.
@@ -76,6 +79,41 @@ docker compose up -d --build
 
 O Caddy fica na frente do servidor e emite o certificado automaticamente quando `DOMAIN` é um domínio real;
 acesse pela URL do domínio. Sem domínio, use `DOMAIN=:80` e acesse pela porta 80.
+
+## Publicar no Easypanel
+
+O Easypanel já traz proxy e HTTPS próprios, então o serviço é um **App** (não um Compose): o `docker-compose.yml`
+e o `Caddyfile` deste repositório não entram nesse caminho — eles disputariam as portas 80/443 com o Easypanel
+se subissem no mesmo servidor.
+
+1. **Servidor**: instale o Easypanel onde as portas 80 e 443 estiverem livres (ele mesmo as ocupa). Se a VPS do
+   Appwrite roda o Traefik do Appwrite nessas portas, use outro servidor para o Easypanel.
+2. **Serviço**: no projeto, **New Service** → **App**, nome `mapas`.
+3. **Source** → **GitHub**: repositório `andrehsilva/sacadaweb-mapas`, branch `main`, **Build Path** `/`
+   (o contexto do build é a raiz, porque a imagem copia `resources/app/out/renderer`).
+4. **Build** → **Dockerfile**, com o caminho `server/Dockerfile`.
+5. **Environment** (só o que é público; a API key fica no seu terminal, nos scripts de `tools/`):
+
+```dotenv
+APPWRITE_ENDPOINT=https://appwrite.sacadaweb.com.br/v1
+APPWRITE_PROJECT_ID=6ad11c64002f575634af
+APPWRITE_DATABASE_ID=sacadaweb_mapas
+APPWRITE_FOLDERS_ID=folders
+APPWRITE_MAPS_ID=maps
+APPWRITE_VERSIONS_ID=versions
+APPWRITE_MAPS_BUCKET_ID=maps
+PORT=3000
+```
+
+6. **Domains**: hostname (`mapas.sacadaweb.com.br`), porta interna **3000**, HTTPS ligado, marcado como
+   primário. Aponte o DNS para o IP do servidor do Easypanel antes do deploy. Servir o app num subdomínio do
+   mesmo domínio do Appwrite deixa o cookie de sessão *same-site* — sem depender do fallback em `localStorage`.
+7. **Deploy** e acompanhe o build; depois confirme em `https://<hostname>/api/health` (`{"ok":true}`) e nos
+   logs. **Enable Auto Deploy** publica a cada push na branch.
+8. A primeira conta sai do seu terminal, com este repositório e o `.env` preenchido:
+   `npm run appwrite:user -- add voce@dominio.com <senha> --admin`.
+
+O serviço é stateless (um único container, sem volume): os dados ficam no Appwrite.
 
 ## Usuários
 
