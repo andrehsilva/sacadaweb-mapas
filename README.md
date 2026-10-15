@@ -59,8 +59,16 @@ npm run dev               # http://localhost:3000
 ## VPS
 
 1. Clone (ou copie) o repositório e crie o `.env` com `APPWRITE_ENDPOINT`, `APPWRITE_PROJECT_ID`,
-   `APPWRITE_API_KEY` e `DOMAIN` - e os ids de recurso, se tiver trocado os padrões.
-2. Suba os containers:
+   `APPWRITE_API_KEY` e `DOMAIN` - e os ids de recurso, se trocar os padrões.
+2. Prepare os recursos e a primeira conta (roda no host, com Node 22+; o container não precisa da API key):
+
+```bash
+npm install
+npm run appwrite:setup
+npm run appwrite:user -- add pessoa@dominio.com <senha> --admin
+```
+
+3. Suba os containers:
 
 ```bash
 docker compose up -d --build
@@ -74,9 +82,14 @@ acesse pela URL do domínio. Sem domínio, use `DOMAIN=:80` e acesse pela porta 
 Não há autocadastro: os usuários são criados pelo admin. A tela de login pede e-mail e senha.
 
 ```bash
-node tools/appwrite-user.mjs add pessoa@dominio.com <senha>            # usuário comum
-node tools/appwrite-user.mjs add pessoa@dominio.com <senha> --admin    # marcado como admin
+npm run appwrite:user -- list                                     # lista as contas
+npm run appwrite:user -- add pessoa@dominio.com <senha>           # usuário comum
+npm run appwrite:user -- add pessoa@dominio.com <senha> --admin   # marcado como admin
+npm run appwrite:user -- passwd pessoa@dominio.com <nova-senha>   # troca a senha
 ```
+
+Fora dos scripts do `package.json`, todo comando de `tools/` precisa do `.env` na linha de comando:
+`node --env-file=.env tools/appwrite-user.mjs list`.
 
 Também dá para criar pelo Console do Appwrite (Auth -> Users).
 
