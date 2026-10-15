@@ -8,7 +8,7 @@ COPY resources/app/out/renderer ./public
 ENV WEB_DIR=/app/public PORT=3000 NODE_ENV=production
 USER node
 EXPOSE 3000
-# Mesma checagem do compose: o Easypanel/Swarm passam a mostrar o estado do container.
+# Mesma checagem do compose, respeitando a porta configurada (o shell expande ${PORT}).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT:-3000}/api/health" >/dev/null || exit 1
 CMD ["node", "server/src/index.js"]
