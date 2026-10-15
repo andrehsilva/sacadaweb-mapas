@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>SacadaWeb - Mapas :: marca</title>
+    <style>
+      @font-face {
+        font-family: "JetBrains Mono";
+        src: url("./fonts/JetBrainsMono-Regular.woff2") format("woff2");
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        src: url("./fonts/JetBrainsMono-Medium.woff2") format("woff2");
+        font-weight: 500;
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        src: url("./fonts/JetBrainsMono-SemiBold.woff2") format("woff2");
+        font-weight: 600;
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        src: url("./fonts/JetBrainsMono-Bold.woff2") format("woff2");
+        font-weight: 700;
+      }
+      @font-face {
+        font-family: "Outfit";
+        src: url("./fonts/Outfit-ExtraBold.woff2") format("woff2");
+        font-weight: 800;
+      }
+      html,
+      body {
+        margin: 0;
+        background: #ffffff;
+      }
+      .stage {
+        display: flex;
+        gap: 24px;
+        padding: 24px;
+        align-items: flex-start;
+      }
+
+      /* ---- lockup usado no cabecalho do PDF (fundo claro) ---- */
+      #lockup {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 8px 0;
+        font-family: "Outfit", sans-serif;
+        font-weight: 800;
+        font-size: 46px;
+        line-height: 1;
+        letter-spacing: -0.015em;
+        color: #131720;
+        white-space: nowrap;
+      }
+      #lockup .web {
+        color: #1f6feb;
+      }
+      #lockup .sub {
+        font-family: "JetBrains Mono", monospace;
+        font-weight: 500;
+        font-size: 20px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #59616f;
+      }
+
+      /* ---- icone do app (ladrilho azul, 512) ---- */
+      #icon {
+        width: 512px;
+        height: 512px;
+        border-radius: 112px;
+        background: #1f6feb;
+        color: #ffffff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        font-family: "Outfit", sans-serif;
+        font-weight: 800;
+        font-size: 86px;
+        letter-spacing: -0.02em;
+      }
+      #icon .sub {
+        font-family: "JetBrains Mono", monospace;
+        font-weight: 500;
+        font-size: 30px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        opacity: 0.92;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div id="lockup">Sacada<span class="web">Web</span><span class="sub">- Mapas</span></div>
+      <div id="icon"><span>SacadaWeb</span><span class="sub">- Mapas</span></div>
+    </div>
+  </body>
+</html>

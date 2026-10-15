@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SacadaWeb - Mapas</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
+    />
+    <!-- Lockup da marca (data URL) publicado em globalThis.SACADAWEB_LOGO -->
+    <script src="./assets/brand.js"></script>
+    <script type="module" crossorigin src="./assets/index-CJTx-kvA.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-CoGUaDkB.css">
+    <!-- Camada de design SacadaWeb (tokens + polimento); entra depois do CSS do app. -->
+    <link rel="stylesheet" href="./assets/sacadaweb.css">
+    <script type="module" src="./assets/sacadaweb.js"></script>
+  </head>
+
+  <body data-kind="mindmap">
+    <div id="app">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <div class="brand">
+            <span class="brand-lockup">
+              <span class="brand-word">Sacada<span class="brand-web">Web</span></span>
+              <span class="brand-sub">- Mapas</span>
+            </span>
+          </div>
+          <div class="sidebar-actions">
+            <button id="btn-new-map" class="primary icon" title="Novo mapa">
+              <span class="btn-plus">+</span><span class="btn-label">Mapa</span>
+            </button>
+            <button id="btn-new-folder" class="icon" title="Nova pasta">
+              <span class="btn-plus">+</span><span class="btn-label">Pasta</span>
+            </button>
+            <button
+              id="btn-import"
+              class="icon"
+              title="Importar XMind, FreeMind, Markdown ou texto"
+            >
+              Importar
+            </button>
+          </div>
+        </div>
+        <input
+          id="tree-filter"
+          type="search"
+          placeholder="Filtrar mapas…"
+          aria-label="Filtrar mapas"
+        />
+        <div id="conflict-banner" class="banner-warning" role="alert" hidden></div>
+        <nav id="tree" aria-label="Mapas e pastas"></nav>
+        <div id="workdir">
+          <span id="workdir-path"></span>
+          <button id="btn-change-workdir" class="icon" title="Trocar a pasta de trabalho">
+            Trocar
+          </button>
+        </div>
+      </aside>
+
+      <main id="workspace">
+        <header id="toolbar">
+          <div class="tb-title">
+            <span id="map-title"></span>
+            <span id="save-status" role="status" aria-live="polite"></span>
+          </div>
+
+          <div class="tb-group" role="group" aria-label="Arquivo">
+            <button
+              id="btn-save"
+              class="tb-btn"
+              data-icon="save"
+              title="Salvar agora (Ctrl+S)"
+              aria-label="Salvar"
+            ></button>
+            <button
+              id="btn-history"
+              class="tb-btn"
+              data-icon="history"
+              title="Versões anteriores: ver e restaurar"
+              aria-label="Histórico de versões"
+            ></button>
+          </div>
+
+          <div class="tb-group" role="group" aria-label="Vista">
+            <button
+              id="btn-search"
+              class="tb-btn mm-only"
+              data-icon="search"
+              aria-pressed="false"
+              title="Buscar no mapa (Ctrl+F)"
+              aria-label="Buscar no mapa"
+            ></button>
+            <select
+              id="layout-select"
+              class="tb-select mm-only"
+              title="Formato do mapa"
+              aria-label="Formato do mapa"
+            ></select>
+            <button
+              id="btn-org-undo"
+              class="tb-btn org-only"
+              data-icon="undo"
+              title="Desfazer (Ctrl+Z)"
+              aria-label="Desfazer"
+              disabled
+            ></button>
+            <button
+              id="btn-org-redo"
+              class="tb-btn org-only"
+              data-icon="redo"
+              title="Refazer (Ctrl+Y)"
+              aria-label="Refazer"
+              disabled
+            ></button>
+            <button
+              id="btn-org-orient"
+              class="tb-btn org-only"
+              data-icon="orientation"
+              title="Alternar entre vertical e horizontal"
+              aria-label="Alternar a direção do organograma"
+            ></button>
+            <button
+              id="btn-fit"
+              class="tb-btn"
+              data-icon="fit"
+              title="Ajustar o mapa à tela"
+              aria-label="Ajustar o mapa à tela"
+            ></button>
+            <button
+              id="btn-minimap"
+              class="tb-btn mm-only"
+              data-icon="minimap"
+              aria-pressed="true"
+              title="Minimapa: mostrar ou ocultar"
+              aria-label="Minimapa"
+            ></button>
+            <button
+              id="btn-note"
+              class="tb-btn mm-only"
+              data-icon="note"
+              aria-pressed="true"
+              title="Painel de notas: mostrar ou ocultar"
+              aria-label="Painel de notas"
+            ></button>
+          </div>
+
+          <div class="tb-group" role="group" aria-label="Exportar">
+            <div class="tb-menu">
+              <button
+                id="btn-export-menu"
+                class="tb-btn tb-btn-text"
+                data-icon="export"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                title="Exportar ou copiar o mapa"
+              >
+                <span>Exportar</span>
+                <svg
+                  class="icon chevron"
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              <div id="export-menu" class="tb-menu-list" role="menu" hidden>
+                <div class="tb-menu-label">Mapa</div>
+                <button id="btn-export-png" role="menuitem" data-icon="image">Imagem (PNG)</button>
+                <button id="btn-export-svg" class="org-only" role="menuitem" data-icon="image">
+                  Imagem vetorial (SVG)
+                </button>
+                <button id="btn-export-pdf" class="org-only" role="menuitem" data-icon="file-check">
+                  PDF (como está na tela)
+                </button>
+                <button id="btn-export-csv" class="org-only" role="menuitem" data-icon="file-text">
+                  Planilha (CSV)
+                </button>
+                <div class="tb-menu-label org-only">Excel</div>
+                <button id="btn-export-xlsx" class="org-only" role="menuitem" data-icon="file-text">
+                  Estrutura numerada (Excel)
+                </button>
+                <button
+                  id="btn-update-xlsx"
+                  class="org-only"
+                  role="menuitem"
+                  data-icon="file-check"
+                >
+                  Atualizar pelo Excel…
+                </button>
+                <div class="tb-menu-label">Compartilhar</div>
+                <button id="btn-export-share" role="menuitem" data-icon="file-text">
+                  Arquivo para compartilhar
+                </button>
+                <button id="btn-export-md" class="mm-only" role="menuitem" data-icon="file-text">
+                  Markdown (texto)
+                </button>
+                <div class="tb-menu-label mm-only">POP</div>
+                <button id="btn-export-pop" class="mm-only" role="menuitem" data-icon="file-check">
+                  Roteiro de POP (.md)
+                </button>
+                <button id="btn-copy-pop" class="mm-only" role="menuitem" data-icon="clipboard">
+                  Copiar p/ POP Analyst
+                </button>
+              </div>
+            </div>
+            <button
+              id="btn-theme"
+              class="tb-btn"
+              data-icon="moon"
+              title="Alternar tema claro/escuro"
+              aria-label="Alternar tema"
+            ></button>
+          </div>
+        </header>
+        <div id="canvas-wrap">
+          <div id="mindmap"></div>
+          <div id="orgchart" hidden></div>
+          <div id="minimap" hidden></div>
+          <div id="search-bar" hidden>
+            <input
+              id="search-input"
+              type="search"
+              placeholder="Buscar no mapa…"
+              aria-label="Buscar no mapa"
+            />
+            <button id="btn-search-next" class="icon">Próximo</button>
+            <button id="btn-search-close" class="icon" aria-label="Fechar busca">✕</button>
+          </div>
+          <div id="empty-state">
+            <strong>Nenhum mapa aberto</strong>
+            <span>Escolha um mapa na barra lateral ou crie um novo.</span>
+          </div>
+        </div>
+      </main>
+
+      <aside id="org-panel" class="org-only" aria-label="Editar caixa"></aside>
+
+      <aside id="note-panel" class="mm-only">
+        <div id="note-title">Nota</div>
+        <textarea
+          id="note-input"
+          placeholder="Detalhes do processo para este nó…"
+          disabled
+        ></textarea>
+        <p class="note-hint">Selecione um nó para ver ou editar a nota dele.</p>
+      </aside>
+    </div>
+
+    <div id="welcome" hidden>
+      <div class="welcome-card">
+        <span class="brand-lockup">
+          <span class="brand-word">Sacada<span class="brand-web">Web</span></span>
+          <span class="brand-sub">- Mapas</span>
+        </span>
+        <h1>Bem-vindo ao Mapas</h1>
+        <p>
+          Escolha a pasta onde os mapas serão guardados. O ideal é uma pasta do Google Drive para
+          desktop, assim tudo sincroniza sozinho.
+        </p>
+        <button id="btn-choose-workdir" class="primary">Escolher pasta…</button>
+      </div>
+    </div>
+
+    <dialog id="dialog"></dialog>
+    <div id="toasts" aria-live="polite"></div>
+
+  </body>
+</html>

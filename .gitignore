@@ -1,0 +1,31 @@
+# Runtime Electron/Chromium (baixado do Electron oficial, ~470 MB — não versionado)
+/SacadaWeb-Mapas.exe
+/*.dll
+/*.pak
+/*.bin
+/*.dat
+/vk_swiftshader_icd.json
+/locales/
+LICENSES.chromium.html
+LICENSE.electron.txt
+
+# Artefatos empacotados (gerados por tools/build-portable.ps1)
+/SacadaWeb-Mapas-*-portable.zip
+/SacadaWeb-Mapas-*-portable.exe
+
+# Dependências
+node_modules/
+
+# Dados de trabalho: mapas e versões anteriores
+*.swmap.json
+.historico/
+
+# Segredos de ambiente (server/ usa .env)
+.env
+.env.*
+
+# Sistema e editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

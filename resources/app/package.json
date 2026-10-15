@@ -1,0 +1,12 @@
+{
+  "name": "sacadaweb-mapas",
+  "productName": "SacadaWeb-Mapas",
+  "version": "1.5.0",
+  "description": "Mapas mentais e organogramas com exportação para POP e BPMN",
+  "main": "./out/main/index.js",
+  "author": "SacadaWeb",
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0"
+  }
+}
