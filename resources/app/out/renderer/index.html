@@ -5,8 +5,15 @@
     <title>SacadaWeb - Mapas</title>
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' %APPWRITE_ORIGIN%;
+               frame-src 'self'"
     />
+    <!-- Config pública do Appwrite: asset gerado pelo servidor a partir do .env. -->
+    <script src="./assets/cloud-config.js"></script>
+    <!-- SDK do Appwrite (build IIFE vendorizado em assets/vendor/appwrite.js). -->
+    <script src="./assets/vendor/appwrite.js"></script>
+    <!-- Cliente da nuvem: define window.api antes do bundle e do lockup da marca. -->
+    <script src="./assets/cloud-api.js"></script>
     <!-- Lockup da marca (data URL) publicado em globalThis.SACADAWEB_LOGO -->
     <script src="./assets/brand.js"></script>
     <script type="module" crossorigin src="./assets/index-CJTx-kvA.js"></script>
@@ -52,9 +59,7 @@
         <nav id="tree" aria-label="Mapas e pastas"></nav>
         <div id="workdir">
           <span id="workdir-path"></span>
-          <button id="btn-change-workdir" class="icon" title="Trocar a pasta de trabalho">
-            Trocar
-          </button>
+          <button id="btn-logout" class="icon" title="Sair da conta">Sair</button>
         </div>
       </aside>
 
@@ -254,19 +259,22 @@
       </aside>
     </div>
 
-    <div id="welcome" hidden>
-      <div class="welcome-card">
+    <div id="login" hidden>
+      <form id="login-form" class="welcome-card">
         <span class="brand-lockup">
           <span class="brand-word">Sacada<span class="brand-web">Web</span></span>
           <span class="brand-sub">- Mapas</span>
         </span>
-        <h1>Bem-vindo ao Mapas</h1>
-        <p>
-          Escolha a pasta onde os mapas serão guardados. O ideal é uma pasta do Google Drive para
-          desktop, assim tudo sincroniza sozinho.
-        </p>
-        <button id="btn-choose-workdir" class="primary">Escolher pasta…</button>
-      </div>
+        <h1>Entrar</h1>
+        <p>Use o e-mail e a senha criados pelo administrador.</p>
+        <label for="login-user">E-mail</label>
+        <input id="login-user" name="email" type="email" autocomplete="username"
+               autocapitalize="none" spellcheck="false" required />
+        <label for="login-pass">Senha</label>
+        <input id="login-pass" name="password" type="password" autocomplete="current-password" required />
+        <p id="login-error" role="alert"></p>
+        <button id="btn-login" type="submit" class="primary">Entrar</button>
+      </form>
     </div>
 
     <dialog id="dialog"></dialog>

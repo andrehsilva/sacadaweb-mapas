@@ -1,0 +1,41 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      PORT: 3000
+      # Só a config pública do Appwrite entra no container; a API key fica no seu terminal (tools/).
+      APPWRITE_ENDPOINT: ${APPWRITE_ENDPOINT:?defina APPWRITE_ENDPOINT no .env}
+      APPWRITE_PROJECT_ID: ${APPWRITE_PROJECT_ID:?defina APPWRITE_PROJECT_ID no .env}
+      APPWRITE_DATABASE_ID: ${APPWRITE_DATABASE_ID:-sacadaweb_mapas}
+      APPWRITE_FOLDERS_ID: ${APPWRITE_FOLDERS_ID:-folders}
+      APPWRITE_MAPS_ID: ${APPWRITE_MAPS_ID:-maps}
+      APPWRITE_VERSIONS_ID: ${APPWRITE_VERSIONS_ID:-versions}
+      APPWRITE_MAPS_BUCKET_ID: ${APPWRITE_MAPS_BUCKET_ID:-maps}
+      APPWRITE_VERSIONS_BUCKET_ID: ${APPWRITE_VERSIONS_BUCKET_ID:-versions}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN:-:80}         # com domínio: HTTPS automático; sem domínio: só HTTP na porta 80
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

@@ -1,0 +1,5 @@
+# {$DOMAIN} vem do ambiente do serviço caddy no compose.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3000
+}

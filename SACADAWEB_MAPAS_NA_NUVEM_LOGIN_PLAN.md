@@ -1,5 +1,12 @@
 # SacadaWeb - Mapas na nuvem: login, Postgres e deploy na VPS
 
+> **Desenho original, parcialmente substituído.** Este documento é o registro do plano aprovado (Fastify +
+> Postgres + Caddy). A execução trocou o backend pelo **Appwrite self-hosted da VPS**: as seções 2 a 5 (schema
+> SQL, autenticação própria, rotas Fastify, CLI de usuários) não valem mais e `server/` hoje é só um servidor
+> estático. O que continua valendo é a interface `window.api` e o tratamento de concorrência da seção 6, as
+> edições de cliente das seções 7 e 8 e o desenho de deploy da seção 9 (sem o serviço de banco). O fluxo atual
+> está no [`README.md`](README.md).
+
 ## Contexto
 
 Hoje o produto é um app Electron que guarda cada mapa como arquivo `.swmap.json` numa pasta local escolhida

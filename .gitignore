@@ -23,6 +23,7 @@ node_modules/
 # Segredos de ambiente (server/ usa .env)
 .env
 .env.*
+!.env.example
 
 # Sistema e editor
 .DS_Store

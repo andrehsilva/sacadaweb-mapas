@@ -1,101 +1,118 @@
-# SacadaWeb - Mapas
+# SacadaWeb - Mapas na nuvem
 
-App de desktop (Windows 64 bits) para mapas mentais e organogramas, com exportação para roteiro de POP, PNG,
-SVG, PDF, CSV e Excel. Esta pasta é o **projeto editável + o app portátil**.
+App web para mapas mentais e organogramas, com exportação para roteiro de POP, PNG, SVG, PDF, CSV e Excel.
+Login e dados ficam no Appwrite self-hosted da VPS; o navegador carrega a UI e fala direto com a API.
 
 - Versão: 1.5.0
 - Linguagem visual: [`DESIGN.md`](DESIGN.md) (porta do design system do NotAI/SacadaWeb)
-- Marca: lockup "SacadaWeb - Mapas" em Outfit 700; ícone com "SW-Mapas" (`SW` nas medidas pequenas)
+- Marca: lockup "SacadaWeb - Mapas" em Outfit 700; ícone com "SW-Mapas"
 
-## Rodar
+## Como funciona
 
-| Quero | Como |
-|---|---|
-| Abrir o app agora | duplo clique em `SacadaWeb-Mapas.exe` |
-| Gerar/entregar uma cópia | `SacadaWeb-Mapas-1.5.0-portable.exe` (arquivo único: extrai ao lado e abre) |
+- `server/src/index.js` é um servidor estático em Node: entrega `resources/app/out/renderer/` e publica a config
+  pública do Appwrite (`window.SACADAWEB_CONFIG`: endpoint, project ID e ids de tabelas e buckets) em
+  `/assets/cloud-config.js`, gerado a partir do `.env` — a CSP da página só deixa rodar script da própria
+  origem, então a config sai como asset, não como script inline.
+- O cliente (`assets/cloud-api.js` sobre o SDK Web vendorizado em `assets/vendor/appwrite.js`) fala direto com
+  o Appwrite: Accounts para login, TablesDB para pastas, mapas e versões, Storage para o conteúdo dos arquivos.
+- Não há pasta local de mapas nem banco próprio. O servidor só serve arquivos: nada de estado, e a API key
+  nunca chega ao navegador. Exportações (PNG, SVG, PDF, CSV, Excel, POP) acontecem no próprio navegador.
 
-Não precisa instalar nem ser administrador. O Windows pode avisar do SmartScreen porque o executável não é
-assinado: _Mais informações_ → _Executar assim mesmo_.
-
-> **Neste repositório** está só o projeto editável: o runtime (`.exe`, `.dll`, `.pak`, `locales/`) e o zip
-> portátil **não** são versionados (o `.exe` sozinho tem 235 MB). Para rodar a partir do clone, veja
-> [Rodar a partir do repositório](#rodar-a-partir-do-repositório).
-
-## Rodar a partir do repositório
-
-O runtime Electron não está no Git, então um clone limpo roda a UI direto da fonte:
+## Configuração
 
 ```bash
-npm --prefix resources/app install    # @electron-toolkit/preload + utils
-npx --yes electron@44 resources/app   # abre a janela com resources/app/out/*
+cp .env.example .env
 ```
 
-Para reconstruir o app empacotado (`resources/app.asar`) antes de abrir o `.exe`, use o passo de
-[Editar o app](#editar-o-app).
+Preencha o bloco do Appwrite:
+
+- `APPWRITE_ENDPOINT` - endpoint com `/v1` no fim (ex.: `https://appwrite.sacadaweb.com.br/v1`).
+- `APPWRITE_PROJECT_ID` - Console -> Settings -> Project ID.
+- `APPWRITE_API_KEY` - chave do projeto com os escopos `databases`, `tables`, `columns`, `indexes`, `buckets`,
+  `files` e `users`.
+
+Os ids de recurso têm padrão e são criados por `npm run appwrite:setup`. Se trocar algum, mantenha o mesmo
+valor no `.env` do servidor.
+
+| Variável | Vai ao navegador | Para que serve |
+|---|---|---|
+| `APPWRITE_ENDPOINT` | sim, em `cloud-config.js` | URL da API do Appwrite |
+| `APPWRITE_PROJECT_ID` | sim, em `cloud-config.js` | projeto usado pelo SDK Web |
+| `APPWRITE_DATABASE_ID` | sim, em `cloud-config.js` | database `sacadaweb_mapas` |
+| `APPWRITE_FOLDERS_ID`, `APPWRITE_MAPS_ID`, `APPWRITE_VERSIONS_ID` | sim, em `cloud-config.js` | tabelas `folders`, `maps` e `versions` |
+| `APPWRITE_MAPS_BUCKET_ID` | sim, em `cloud-config.js` | bucket `maps` (conteúdo dos mapas e das versões) |
+| `APPWRITE_API_KEY` | não | cria recursos e usuários; usada só pelos scripts de `tools/` |
+| `PORT` | não | porta do servidor estático (padrão 3000) |
+| `DOMAIN` | não | domínio do Caddy no compose (`:80` fica só em HTTP) |
+
+## Rodar local
+
+```bash
+npm install
+npm run appwrite:setup    # cria database, tabelas, índices e buckets
+npm run dev               # http://localhost:3000
+```
+
+`npm run dev` lê o `.env` da raiz e reinicia a cada alteração; `npm run start` roda o mesmo servidor sem
+`--watch`.
+
+## VPS
+
+1. Clone (ou copie) o repositório e crie o `.env` com `APPWRITE_ENDPOINT`, `APPWRITE_PROJECT_ID`,
+   `APPWRITE_API_KEY` e `DOMAIN` - e os ids de recurso, se tiver trocado os padrões.
+2. Suba os containers:
+
+```bash
+docker compose up -d --build
+```
+
+O Caddy fica na frente do servidor e emite o certificado automaticamente quando `DOMAIN` é um domínio real;
+acesse pela URL do domínio. Sem domínio, use `DOMAIN=:80` e acesse pela porta 80.
+
+## Usuários
+
+Não há autocadastro: os usuários são criados pelo admin. A tela de login pede e-mail e senha.
+
+```bash
+node tools/appwrite-user.mjs add pessoa@dominio.com <senha>            # usuário comum
+node tools/appwrite-user.mjs add pessoa@dominio.com <senha> --admin    # marcado como admin
+```
+
+Também dá para criar pelo Console do Appwrite (Auth -> Users).
 
 ## Onde ficam os dados
 
-- Mapas: na pasta escolhida na primeira abertura (arquivos `.swmap.json`), com versões anteriores em `.historico/`.
-- Configuração (pasta de trabalho e tema): `%APPDATA%\SacadaWeb-Mapas\config.json`.
+Tudo no Appwrite: as tabelas `folders`, `maps` e `versions` guardam a árvore de pastas, os mapas (nome,
+template, revisão, tamanho, último autor) e o histórico; o bucket `maps` guarda o `.swmap.json` inteiro — o
+conteúdo atual do mapa e, quando ele é substituído, o arquivo anterior que vira uma versão.
+
+O histórico mantém as 20 versões mais novas de cada mapa. Antes de gravar conteúdo novo, o arquivo antigo
+vira uma linha em `versions`, com freio de 5 minutos entre versões (o que passar do limite é podado).
 
 ## Estrutura
 
 ```
-SacadaWeb-Mapas.exe            runtime Electron com o app embutido
-*.dll *.pak *.bin *.dat        runtime Electron (não editar)
-locales/                       traduções do Chromium
-resources/app.asar             aplicativo empacotado  <- gerado de resources/app
-resources/app/                 código do app (fonte de verdade para edição)
-  out/main/index.js              Node: janela, arquivos, IPC, exportação de PDF
-  out/preload/index.js           ponte contextBridge (window.api)
-  out/renderer/index.html        casca da UI
-  out/renderer/assets/           bundle do renderer, CSS, fontes, camada de design
-build/                         insumos e ferramentas de build (asar, rcedit, masters de marca)
-tools/pack-brand.py            gera ícones e o lockup a partir de build/*-master.png
-tools/build-portable.ps1       gera o executável portátil de arquivo único
-DESIGN.md                      tokens e regras do design system
+server/                             servidor estático + config pública do Appwrite
+  src/index.js                        entrega resources/app/out/renderer e /assets/cloud-config.js a partir do .env
+tools/appwrite-setup.mjs            cria database, tabelas, índices e buckets (npm run appwrite:setup)
+tools/appwrite-user.mjs             cria e atualiza usuários
+tools/pack-brand.py                 gera os ícones e a marca (brand.js) a partir dos masters em build/
+resources/app/out/renderer/         UI (bundle, CSS, fontes)
+  assets/cloud-api.js                 interface window.api sobre o Appwrite
+  assets/vendor/appwrite.js           SDK Web do Appwrite (IIFE, expõe window.Appwrite)
+docker-compose.yml                  app + Caddy
+Caddyfile                           reverse proxy com HTTPS automático
+.env.example                        modelo das variáveis de ambiente
 ```
 
-## Editar o app
+## App de desktop (aposentado)
 
-1. Mexa em `resources/app/**` (o código está legível, não minificado).
-2. Reempacote e rode:
+O app Electron portátil e o fluxo de mapas em pasta local saíram de cena: `resources/app/out/main/`,
+`resources/app/out/preload/`, `resources/app.asar`, `SacadaWeb-Mapas.exe` e `tools/build-portable.ps1`
+continuam no repositório, mas o fluxo na nuvem não usa nada disso - a UI atual é só
+`resources/app/out/renderer/`.
 
-```bat
-node build\node_modules\@electron\asar\bin\asar.mjs pack resources\app resources\app.asar
-SacadaWeb-Mapas.exe
-```
+## Histórico do plano
 
-O runtime carrega `resources/app.asar`. As ferramentas de build (`@electron/asar`, `rcedit`) ficam em
-`build/node_modules`; para reinstalar: `cd build && npm install`.
-
-## Marca e ícone
-
-- Fonte do desenho: `build/brand.html` (lockup + ladrilho do ícone, com as fontes embutidas do app).
-  Renderize os alvos `#icon` e `#icon-small` em 512×512 e salve como `build/icon-master.png` e
-  `build/icon-small-master.png`; o lockup vai para `build/lockup-master.png`.
-- Empacotar: `python tools/pack-brand.py` (gera `build/icon.ico`, `build/icon.png`, `resources/icon.png`,
-  `resources/app/resources/icon.png` e `resources/app/out/renderer/assets/brand.js`).
-- Aplicar o ícone no executável (com o app fechado):
-
-```bat
-build\node_modules\rcedit\bin\rcedit-x64.exe SacadaWeb-Mapas.exe ^
-  --set-icon build\icon.ico ^
-  --set-version-string ProductName "SacadaWeb-Mapas" ^
-  --set-version-string FileDescription "SacadaWeb-Mapas" ^
-  --set-version-string CompanyName "SacadaWeb" ^
-  --set-version-string OriginalFilename "SacadaWeb-Mapas.exe"
-```
-
-- Fontes embutidas (OFL, licenças em `resources/app/out/renderer/assets/fonts`): JetBrains Mono
-  (chrome, 400/500/600/700) e Outfit 700 (marca, a mesma de sacadaweb.com.br).
-
-## Gerar o pacote portátil
-
-```bat
-powershell -File tools\build-portable.ps1
-```
-
-Monta o payload (runtime Electron + `resources/app.asar`, sem o projeto e sem os insumos de build) e grava
-`SacadaWeb-Mapas-<versão>-portable.zip`. Usa o `ZipArchive` do .NET, sem dependência externa; passe
-`-SevenZip <...>\7z.exe` para usar o 7-Zip (mais rápido).
+`SACADAWEB_MAPAS_NA_NUVEM_LOGIN_PLAN.md` é o registro do desenho original (Fastify + Postgres): o login, o
+Postgres e o CLI dele foram substituídos pelo Appwrite.

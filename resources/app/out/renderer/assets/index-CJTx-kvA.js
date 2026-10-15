@@ -30413,10 +30413,10 @@ function createSidebar(handlers) {
     showToast("Cópia criada.");
   }
   async function remove(entry) {
-    const what = entry.kind === "folder" ? "a pasta e tudo que há nela" : "o mapa";
+    const what = entry.kind === "folder" ? "a pasta, os mapas dela e o histórico" : "o mapa e o histórico";
     const confirmed = await confirmAction({
       title: "Excluir",
-      message: `Enviar ${what} "${entry.name}" para a Lixeira?`,
+      message: `Apagar ${what} de "${entry.name}"? Não dá para desfazer.`,
       confirmLabel: "Excluir",
       danger: true
     });
@@ -30517,10 +30517,10 @@ function createSidebar(handlers) {
       if (path) selectedFolder = parentOf(path);
       render2();
     },
-    setWorkDir(path) {
+    setUser(user) {
       const label = byId("workdir-path");
-      label.textContent = path;
-      label.title = path;
+      label.textContent = user.username;
+      label.title = user.role === "admin" ? `${user.username} (administrador)` : user.username;
     },
     targetFolder: () => selectedFolder,
     createMapInTarget: () => createMap(selectedFolder),
@@ -30611,9 +30611,35 @@ async function saveCurrentMap() {
     meta: { ...meta, updatedAt: (/* @__PURE__ */ new Date()).toISOString() },
     ...isOrg ? { orgchart: orgView.getData() } : { mindmap: editor.getData() }
   };
-  await window.api.saveMap(path, file);
+  try {
+    await window.api.saveMap(path, file);
+  } catch (error) {
+    if (error?.code !== "conflict") throw error;
+    const keepMine = await resolveConflict(error) !== false;
+    if (!keepMine) {
+      await openMapAt(path, { force: true, skipFlush: true });
+      return;
+    }
+    await window.api.saveMap(path, file, { force: true });
+  }
   if (openMap?.path === path) openMap = { path, meta: { ...file.meta, title: baseName(path) } };
   savedSnapshot = snapshot;
+}
+function resolveConflict(error) {
+  const who = error?.details?.updatedBy ? `"${error.details.updatedBy}"` : "Outra pessoa";
+  const when = error?.details?.updatedAt ? ` (${VERSION_DATE_FORMAT.format(new Date(error.details.updatedAt))})` : "";
+  return openDialog((dialog, close2) => {
+    const mine = button("Manter a minha versão", "primary");
+    const theirs = button("Usar a versão da nuvem");
+    mine.addEventListener("click", () => close2(true));
+    theirs.addEventListener("click", () => close2(false));
+    dialog.append(
+      el("h2", void 0, "Mapa alterado por outra pessoa"),
+      el("p", void 0, `${who} salvou este mapa por último${when}. Se você mantiver a sua versão, a dele fica guardada no histórico.`),
+      actionRow([theirs, mine])
+    );
+    queueMicrotask(() => mine.focus());
+  });
 }
 const autosave = createAutosave(saveCurrentMap, setSaveState);
 async function flushSafely() {
@@ -30649,7 +30675,7 @@ function closeMap() {
 }
 async function openMapAt(path, options = {}) {
   if (!options.force && openMap?.path === path) return;
-  if (!await flushSafely()) return;
+  if (!options.skipFlush && !await flushSafely()) return;
   let file;
   try {
     file = await window.api.readMap(path);
@@ -30712,6 +30738,14 @@ async function toggleTheme() {
   updateThemeButton();
   editor.setTheme(config.theme);
   orgView.setTheme(config.theme);
+}
+async function logout() {
+  if (!await flushSafely()) return;
+  try {
+    await window.api.logout();
+  } finally {
+    location.reload();
+  }
 }
 function pendingSuffix(text) {
   const pending = countPending(text);
@@ -30798,7 +30832,7 @@ async function exportOrgPdf() {
   try {
     const html2 = orgView.exportPdfHtml(openMap.meta.title);
     const saved = await window.api.exportPdf(openMap.meta.title, html2);
-    if (saved) showToast("Exportado como PDF (como está na tela).");
+    if (saved) showToast('PDF pronto: escolha "Salvar como PDF" na janela de impressão.');
   } catch (error) {
     showError(error);
   }
@@ -30866,17 +30900,7 @@ function runSearch() {
   if (text) editor.search(text);
   else editor.endSearch();
 }
-async function changeWorkDir() {
-  if (!await flushSafely()) return;
-  const next2 = await window.api.chooseWorkDir();
-  if (!next2) return;
-  config = next2;
-  closeMap();
-  await startWorkspace();
-}
 async function startWorkspace() {
-  byId("welcome").hidden = true;
-  if (config.workDir) sidebar.setWorkDir(config.workDir);
   try {
     await sidebar.refresh();
   } catch (error) {
@@ -30896,7 +30920,7 @@ function bindToolbar() {
   layoutSelect.addEventListener("change", () => editor.setLayout(layoutSelect.value));
   byId("btn-minimap").addEventListener("click", () => minimap.toggle());
   byId("btn-history").addEventListener("click", () => void openHistory());
-  byId("btn-change-workdir").addEventListener("click", () => void changeWorkDir().catch(showError));
+  byId("btn-logout").addEventListener("click", () => void logout());
   byId("btn-save").addEventListener("click", () => void flushSafely());
   byId("btn-search").addEventListener("click", openSearch);
   byId("btn-fit").addEventListener(
@@ -30948,15 +30972,15 @@ function bindShortcuts() {
   });
 }
 function bindWindowClose() {
-  window.api.onCloseRequested(async () => {
-    const isSaved = await flushSafely();
-    const shouldClose = isSaved || await confirmAction({
-      title: "Não foi possível salvar",
-      message: "As últimas alterações do mapa não foram salvas. Fechar mesmo assim?",
-      confirmLabel: "Fechar sem salvar",
-      danger: true
-    });
-    if (shouldClose) await window.api.closeWindow();
+  window.addEventListener("beforeunload", (event) => {
+    const state = statusEl.dataset.state;
+    if (state !== "dirty" && state !== "saving" && state !== "error") return;
+    void autosave.flush().catch(() => void 0);
+    event.preventDefault();
+    event.returnValue = "";
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") void autosave.flush().catch(() => void 0);
   });
 }
 async function init() {
@@ -30968,13 +30992,45 @@ async function init() {
   bindShortcuts();
   bindWindowClose();
   showMapArea(false);
-  byId("btn-choose-workdir").addEventListener("click", async () => {
-    const next2 = await window.api.chooseWorkDir();
-    if (!next2) return;
-    config = next2;
-    await startWorkspace();
+  if (config.user) await enterWorkspace(config.user);
+  else showLogin();
+}
+async function enterWorkspace(user) {
+  config = { ...config, user };
+  sidebar.setUser(user);
+  await startWorkspace();
+}
+function showLogin() {
+  const overlay = byId("login");
+  const form = byId("login-form");
+  const userInput = byId("login-user");
+  const passInput = byId("login-pass");
+  const error2 = byId("login-error");
+  const submit = byId("btn-login");
+  userInput.value = "";
+  passInput.value = "";
+  error2.textContent = "";
+  overlay.hidden = false;
+  userInput.focus();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    submit.disabled = true;
+    error2.textContent = "";
+    try {
+      const next2 = await window.api.login(userInput.value.trim(), passInput.value);
+      config = { theme: next2.theme, user: next2.user };
+      applyTheme(config.theme);
+      updateThemeButton();
+      passInput.value = "";
+      overlay.hidden = true;
+      await enterWorkspace(config.user);
+    } catch (error) {
+      error2.textContent = errorMessage(error);
+      passInput.select();
+    } finally {
+      submit.disabled = false;
+    }
   });
-  if (config.workDir) await startWorkspace();
-  else byId("welcome").hidden = false;
 }
 init().catch(showError);
