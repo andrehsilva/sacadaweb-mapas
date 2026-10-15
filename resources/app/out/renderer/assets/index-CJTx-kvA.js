@@ -30984,7 +30984,14 @@ function bindWindowClose() {
   });
 }
 async function init() {
-  config = await window.api.getConfig();
+  try {
+    config = await window.api.getConfig();
+  } catch (error) {
+    // Nuvem fora do ar ou bloqueada: mostra a tela de entrada mesmo assim, para dar o que fazer
+    // (tentar de novo) em vez de deixar a casca do app sem mapa e sem login.
+    showError(error);
+    config = { theme: "dark", user: null };
+  }
   applyTheme(config.theme);
   initToolbar();
   updateThemeButton();
