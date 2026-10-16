@@ -20913,6 +20913,14 @@ const STAGE_ORPHAN_OPACITY = "0.55";
 const STAGE_SIDE_OPPOSITE = { n: "s", s: "n", e: "w", w: "e", ne: "sw", nw: "se", se: "nw", sw: "ne" };
 const STAGE_DASH_LABELS = { solid: "Sólido", dashed: "Tracejado", dotted: "Pontilhado" };
 const STAGE_WIDTHS = [1, 1.5, 2.5];
+// Moldura/raia (fatia 4): faixa de titulo fixa no topo, pega propria da divisoria (o corpo
+// continua sendo o alvo do arraste da moldura) e um minimo para a faixa nunca colapsar.
+const STAGE_FRAME_BAND = 28;
+const STAGE_FRAME_RADIUS = 6;
+const STAGE_LANE_GRIP = 8;
+const STAGE_LANE_LABEL = 26;
+const STAGE_LANE_MIN = 40;
+const STAGE_LANE_DEFAULT = 120;
 const STAGE_ARROW_LABELS = { none: "Sem ponta", arrow: "Seta", dot: "Ponto" };
 const STAGE_MARKER_COLOR = { ponto: "accent", numero: "accent", critico: "danger", erro: "warning", conferido: "success", anexo: "muted" };
 const STAGE_MARKER_LABELS = { ponto: "Ponto", numero: "Número", critico: "Crítico", erro: "Erro", conferido: "Conferido", anexo: "Anexo" };
@@ -20946,6 +20954,14 @@ const STAGE_FLOW_SHAPES = [
 const STAGE_ANNOTATION_SHAPES = [
   { id: "legend", label: "Legenda", icon: "stage-legend" },
   { id: "frame", label: "Moldura", icon: "stage-frame" }
+];
+// Presets de moldura/raia: a montagem nasce pronta (secoes aninhadas, faixas nomeadas) e
+// entra no desenho como um unico passo de undo.
+const STAGE_PRESETS = [
+  { id: "pop", label: "Folha de POP", icon: "stage-sheet" },
+  { id: "lane-h", label: "Raia horizontal", icon: "stage-lane-h" },
+  { id: "lane-v", label: "Raia vertical", icon: "stage-lane-v" },
+  { id: "board", label: "Quadro", icon: "stage-frame" }
 ];
 const STAGE_SHAPE_LABELS = [...STAGE_GEO_SHAPES, ...STAGE_FLOW_SHAPES, ...STAGE_ANNOTATION_SHAPES].reduce((acc, entry) => {
   acc[entry.id] = entry.label;
@@ -21372,12 +21388,218 @@ function stageNoteMarkup(item, paint, box) {
   const text = stageTextMarkup(item, paint, { x: box.x + 7, y: box.y + 5, width: box.width - 14, height: box.height - 10 }, { align: "left", valign: "top", size: stageNum(item.text?.size, 12) });
   return body + corner + text;
 }
+// ------------------------------------------------------------- moldura e raia (fatia 4)
+function stageFrameKind(item) {
+  return item.kind === "lane" ? "lane" : item.kind === "sheet" ? "sheet" : "free";
+}
+// Faixa de titulo: altura fixa, colada no topo, nunca maior que a propria moldura.
+function stageFrameBand(item) {
+  return Math.min(STAGE_FRAME_BAND, Math.max(0, stageNum(item.h, 0)));
+}
+// Corpo: o que sobra abaixo da faixa de titulo.
+function stageFrameBody(item, box) {
+  const band = stageFrameBand(item);
+  return stageBox(box.x, box.y + band, box.width, Math.max(0, box.height - band));
+}
+// Faixas da raia: em "h" as colunas correm no eixo x (rotulo na faixa de titulo); em "v" as
+// linhas correm no eixo y, com o rotulo girado na coluna da esquerda. A ultima faixa fecha
+// no fim do corpo, para a raia nao ficar com vao morto na borda.
+function stageLaneLayout(item, box) {
+  const lanes = Array.isArray(item.lanes) ? item.lanes : [];
+  const horizontal = (item.orientation ?? "h") !== "v";
+  const body = stageFrameBody(item, box);
+  const label = horizontal ? 0 : Math.min(STAGE_LANE_LABEL, body.width);
+  const start = horizontal ? body.x : body.y;
+  const extent = horizontal ? body.width : body.height;
+  const cells = [];
+  let cursor = start;
+  lanes.forEach((lane, index) => {
+    const last = index === lanes.length - 1;
+    const end = last ? start + extent : Math.min(start + extent, cursor + Math.max(0, stageNum(lane.size, 0)));
+    const span = Math.max(0, end - cursor);
+    cells.push({
+      lane,
+      index,
+      content: horizontal
+        ? stageBox(cursor, body.y, span, body.height)
+        : stageBox(body.x + label, cursor, Math.max(0, body.width - label), span),
+      header: horizontal
+        ? stageBox(cursor, box.y, span, stageFrameBand(item))
+        : stageBox(body.x, cursor, label, span)
+    });
+    cursor += Math.max(0, stageNum(lane.size, 0));
+  });
+  return { horizontal, body, label, cells };
+}
+// Rotulo em caixa alta e uma linha so: o truncado vira reticencia porque o svg exportado nao
+// recorta (o texto que sobra escaparia da celula).
+function stageFrameLabelText(value, maxWidth, size) {
+  const lines = stageTextLines(String(value ?? "").trim().toUpperCase(), Math.max(16, maxWidth), size);
+  if (!lines.length || !lines[0]) return "";
+  if (lines.length === 1) return lines[0];
+  const first = lines[0];
+  return `${first.slice(0, Math.max(1, first.length - 1))}…`;
+}
+function stageFrameLabel(value, paint, cell, rotated) {
+  const size = 11;
+  const text = stageFrameLabelText(value, (rotated ? cell.height : cell.width) - 12, size);
+  if (!text) return "";
+  const centerX = stageRound(cell.x + cell.width / 2);
+  const centerY = stageRound(cell.y + cell.height / 2);
+  const attrs = `font-family="${stageEscape(FONT)}" font-size="${size}" font-weight="600" letter-spacing="0.6" fill="${paint.color("muted")}" text-anchor="middle" dominant-baseline="central"`;
+  const turn = rotated ? ` transform="rotate(-90 ${centerX} ${centerY})"` : "";
+  return `<text${turn} ${attrs} x="${centerX}" y="${centerY}">${stageEscape(text)}</text>`;
+}
+// Corpo e faixa pela token: fio border-strong, corpo surface, titulo/rotulo em muted maiusculo.
+function stageFrameMarkup(item, paint, box) {
+  const kind = stageFrameKind(item);
+  const band = stageFrameBand(item);
+  const separator = paint.color("border");
+  const outline = `<rect x="${stageRound(box.x)}" y="${stageRound(box.y)}" width="${stageRound(box.width)}" height="${stageRound(box.height)}" rx="${STAGE_FRAME_RADIUS}" fill="${paint.color("surface")}" stroke="${paint.color("border-strong")}" stroke-width="${kind === "sheet" ? 2 : 1.5}"/>`;
+  const rule = band > 0 && box.height > band
+    ? `<path d="M ${stageRound(box.x)} ${stageRound(box.y + band)} H ${stageRound(box.x + box.width)}" fill="none" stroke="${separator}" stroke-width="1"/>`
+    : "";
+  if (kind !== "lane") {
+    return outline + rule + stageFrameLabel(item.title, paint, stageBox(box.x, box.y, box.width, band), false);
+  }
+  const layout = stageLaneLayout(item, box);
+  const body = layout.body;
+  const id = stageEscape(item.id);
+  let labels = "";
+  let dividers = "";
+  let grips = "";
+  layout.cells.forEach((cell, index) => {
+    // A celula do rotulo (com o texto dentro) e o alvo do duplo-clique que renomeia a faixa:
+    // o grupo leva o data-lane para o clique pegar tanto a area vazia quanto o proprio texto.
+    labels += `<g class="stage-lane-head" data-lane="${stageEscape(cell.lane.id)}"><rect class="stage-lane-label" data-item="${id}" x="${stageRound(cell.header.x)}" y="${stageRound(cell.header.y)}" width="${stageRound(cell.header.width)}" height="${stageRound(cell.header.height)}" fill="transparent" stroke="none"/>${stageFrameLabel(cell.lane.label, paint, cell.header, !layout.horizontal)}</g>`;
+    if (index >= layout.cells.length - 1) return;
+    // Divisoria tracejada com a pega propria em volta: ela redimensiona as duas faixas
+    // vizinhas, entao nao pode disputar o ponteiro com o corpo da moldura.
+    if (layout.horizontal) {
+      const x = cell.content.x + cell.content.width;
+      dividers += `<path d="M ${stageRound(x)} ${stageRound(body.y)} V ${stageRound(body.y + body.height)}" fill="none" stroke="${separator}" stroke-width="1" stroke-dasharray="4 4"/>`;
+      grips += `<rect class="stage-grab" data-item="${id}" data-grab="${index}" x="${stageRound(x - STAGE_LANE_GRIP / 2)}" y="${stageRound(body.y)}" width="${STAGE_LANE_GRIP}" height="${stageRound(body.height)}" fill="transparent" stroke="none" style="cursor:col-resize"/>`;
+      return;
+    }
+    const y = cell.content.y + cell.content.height;
+    dividers += `<path d="M ${stageRound(body.x)} ${stageRound(y)} H ${stageRound(body.x + body.width)}" fill="none" stroke="${separator}" stroke-width="1" stroke-dasharray="4 4"/>`;
+    grips += `<rect class="stage-grab" data-item="${id}" data-grab="${index}" x="${stageRound(body.x)}" y="${stageRound(y - STAGE_LANE_GRIP / 2)}" width="${stageRound(body.width)}" height="${STAGE_LANE_GRIP}" fill="transparent" stroke="none" style="cursor:row-resize"/>`;
+  });
+  const column = layout.label > 0
+    ? `<path d="M ${stageRound(body.x + layout.label)} ${stageRound(body.y)} V ${stageRound(body.y + body.height)}" fill="none" stroke="${separator}" stroke-width="1"/>`
+    : "";
+  // Na raia horizontal os rotulos tomam a faixa de titulo; na vertical sobra espaco para o
+  // titulo da propria raia (os rotulos foram para a coluna girada).
+  const title = layout.horizontal ? "" : stageFrameLabel(item.title, paint, stageBox(box.x, box.y, box.width, band), false);
+  return outline + rule + title + column + labels + dividers + grips;
+}
+// Posse: quem guarda o id em children. No grupo o vinculo e selecao; na moldura e ordem de
+// desenho e arraste conjunto.
+function stageFrameOwnerOf(list, id) {
+  for (const item of list) {
+    if (item.type === "frame" && (item.children ?? []).includes(id)) return item;
+  }
+  return null;
+}
+// Descendentes de posse (o `seen` corta ciclo vindo de arquivo).
+function stageFrameDescendants(list, id) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set([id]);
+  const walk = (parent) => {
+    for (const child of parent.children ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      out.push(child);
+      const item = list.find((entry) => entry.id === child);
+      if (item?.type === "frame") walk(item);
+    }
+  };
+  const item = list.find((entry) => entry.id === id);
+  if (item) walk(item);
+  return out;
+}
+// Profundidade da posse: a moldura mais externa desenha primeiro (o corpo da secao cobre o da
+// folha que a contem).
+function stageFrameDepth(list, item) {
+  const seen = /* @__PURE__ */ new Set([item.id]);
+  let owner = stageFrameOwnerOf(list, item.id);
+  let depth = 0;
+  while (owner && !seen.has(owner.id) && depth < 32) {
+    seen.add(owner.id);
+    depth += 1;
+    owner = stageFrameOwnerOf(list, owner.id);
+  }
+  return depth;
+}
+function stageFrameOrder(list) {
+  return list.filter((item) => item.type === "frame").map((item, index) => ({ item, index, depth: stageFrameDepth(list, item) })).sort((a, b) => a.depth - b.depth || a.index - b.index).map((entry) => entry.item);
+}
+// Moldura sob um ponto: a mais interna (menor area) vence, para o item entrar na secao certa.
+function stageFrameAtPoint(list, point, exclude) {
+  let best = null;
+  for (const item of list) {
+    if (item.type !== "frame" || exclude.has(item.id)) continue;
+    const box = stageItemRect(item, list);
+    if (point.x < box.x || point.x > box.x + box.width || point.y < box.y || point.y > box.y + box.height) continue;
+    const area = box.width * box.height;
+    if (best && best.area <= area) continue;
+    best = { id: item.id, area };
+  }
+  return best ? best.id : null;
+}
+// O que anda com o que foi agarrado: o no (grupo ja expandido) e o conteudo das molduras
+// selecionadas — mover a moldura reescreve o x/y absoluto dos filhos no mesmo passo.
+function stageMoveSet(list, roots) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (item) => {
+    if (!item || seen.has(item.id)) return;
+    seen.add(item.id);
+    out.push(item);
+  };
+  for (const item of roots) {
+    add(item);
+    if (item.type !== "frame") continue;
+    for (const id of stageFrameDescendants(list, item.id)) add(list.find((entry) => entry.id === id));
+  }
+  return out;
+}
+function stageFrameItem(kind, x, y, w, h, title) {
+  return { id: stageUid("f"), type: "frame", kind, x, y, w, h, title, children: [] };
+}
+// Montagem do preset a partir do canto superior esquerdo (ja encaixado na grade).
+function stagePresetItems(id, x, y) {
+  if (id === "board") return [stageFrameItem("free", x, y, 320, 240, "Quadro")];
+  if (id === "pop") {
+    const sheet = stageFrameItem("sheet", x, y, 720, 560, "Folha de POP");
+    const sections = [
+      stageFrameItem("free", x + 16, y + 44, 688, 112, "Identificação"),
+      stageFrameItem("free", x + 16, y + 168, 688, 112, "Objetivo"),
+      stageFrameItem("free", x + 16, y + 292, 400, 240, "Etapas"),
+      stageFrameItem("free", x + 428, y + 292, 276, 240, "Documentos")
+    ];
+    // Cada secao e filha da folha: arrastar a folha leva o POP inteiro num passo de undo.
+    sheet.children = sections.map((section) => section.id);
+    return [sheet, ...sections];
+  }
+  const horizontal = id !== "lane-v";
+  const labels = ["Etapa", "Responsável", "Sistema"];
+  const size = horizontal ? 220 : 90;
+  const lanes = labels.map((label) => ({ id: stageUid("n"), label, size }));
+  const frame = stageFrameItem("lane", x, y, horizontal ? size * labels.length : 420, horizontal ? 200 : STAGE_FRAME_BAND + size * labels.length, "");
+  frame.orientation = horizontal ? "h" : "v";
+  frame.lanes = lanes;
+  return [frame];
+}
 function stageItemMarkup(item, list, paint) {
   const box = stageItemRect(item, list);
   const rotation = stageRotationOf(item);
   const center = stageBoxCenter(box);
   const transform = rotation ? ` transform="rotate(${stageRound(rotation)} ${stageRound(center.x)} ${stageRound(center.y)})"` : "";
   const head = `class="stage-item" data-id="${stageEscape(item.id)}" data-type="${stageEscape(item.type)}"${transform}`;
+  if (item.type === "frame") {
+    return `<g ${head}>${stageFrameMarkup(item, paint, box)}</g>`;
+  }
   if (item.type === "marker") {
     return `<g ${head}>${stageMarkerMarkup(item, paint, box)}</g>`;
   }
@@ -21436,8 +21658,14 @@ function renderAnnotationsSvg(items, options = {}) {
   const prefix = options.idPrefix ?? "stage";
   const registry = /* @__PURE__ */ new Map();
   const body = [];
+  // A moldura desenha abaixo do conteudo: primeiro as molduras (a que contem antes da
+  // contida) e so depois o resto, para o corpo nunca cobrir forma.
+  for (const item of stageFrameOrder(list)) {
+    const markup = stageItemMarkup(item, list, paint);
+    if (markup) body.push(markup);
+  }
   for (const item of list) {
-    if (item.type === "group") continue;
+    if (item.type === "group" || item.type === "frame") continue;
     const markup = item.type === "connector" ? stageConnectorMarkup(item, list, paint, registry, prefix) : stageItemMarkup(item, list, paint);
     if (markup) body.push(markup);
   }
@@ -21524,6 +21752,7 @@ function stagePrefixFor(item) {
   if (item.type === "connector") return "l";
   if (item.type === "marker") return "m";
   if (item.type === "group") return "g";
+  if (item.type === "frame") return "f";
   if (item.type === "note") return "n";
   if (item.type === "text") return "t";
   return "a";
@@ -21547,6 +21776,7 @@ function createStage(options) {
   let lastClick = { id: null, at: 0 };
   let editBox = null;
   let editTarget = null;
+  let editLane = null;
   let swallowClick = false;
   const findItem = (id) => items.find((entry) => entry.id === id);
   const cloneValue = (value) => JSON.parse(JSON.stringify(value));
@@ -21832,10 +22062,13 @@ function createStage(options) {
         }));
       }
       if (frame.id) {
-        const top = stageRotatePoint({ x: center.x, y: frame.box.y }, center, frame.rotation);
-        const up = Math.hypot(top.x - center.x, top.y - center.y) || 1;
-        const rotationPoint = { x: top.x + (top.x - center.x) / up * STAGE_ROT_OFFSET, y: top.y + (top.y - center.y) / up * STAGE_ROT_OFFSET };
-        overlay.append(stageSvgEl("circle", { class: "stage-handle", "data-handle": "rot", "data-item": frame.id, cx: stageRound(rotationPoint.x), cy: stageRound(rotationPoint.y), r: 4.5 }));
+        // A moldura nao gira: fora o puxador de rotacao, ficam as alcas de conectar.
+        if (single?.type !== "frame") {
+          const top = stageRotatePoint({ x: center.x, y: frame.box.y }, center, frame.rotation);
+          const up = Math.hypot(top.x - center.x, top.y - center.y) || 1;
+          const rotationPoint = { x: top.x + (top.x - center.x) / up * STAGE_ROT_OFFSET, y: top.y + (top.y - center.y) / up * STAGE_ROT_OFFSET };
+          overlay.append(stageSvgEl("circle", { class: "stage-handle", "data-handle": "rot", "data-item": frame.id, cx: stageRound(rotationPoint.x), cy: stageRound(rotationPoint.y), r: 4.5 }));
+        }
         for (const anchor of STAGE_LINK_ANCHORS) {
           const base = stageAnchorPoint(frame.box, anchor, 0);
           const dx = base.x - center.x;
@@ -21885,7 +22118,13 @@ function createStage(options) {
     const entry = { button: button2, descriptor, icon, matches: (active) => toolMatches(descriptor, active) };
     toolButtons.push(entry);
     button2.addEventListener("click", () => {
-      setTool(descriptor);
+      // O preset nao e ferramenta de desenho: ele monta o conjunto de uma vez.
+      if (descriptor.kind === "preset") {
+        closeFlyouts();
+        insertPreset(descriptor.preset);
+      } else {
+        setTool(descriptor);
+      }
       button2.blur();
     });
     return entry;
@@ -21950,6 +22189,8 @@ function createStage(options) {
     groupItem(flyout, group, { kind: "text" }, "Texto (T)", "stage-text");
     groupItem(flyout, group, { kind: "note" }, "Nota (N)", "note");
     for (const shape of STAGE_ANNOTATION_SHAPES) groupItem(flyout, group, { kind: "shape", shape: shape.id }, stageToolTitle(shape), shape.icon);
+    // Molduras e raias saem prontas: o item monta o conjunto no palco (um passo de undo).
+    for (const preset of STAGE_PRESETS) groupItem(flyout, group, { kind: "preset", preset: preset.id }, preset.label, preset.icon);
   }));
   palette.append(el("span", "stage-sep"));
   const actions = [
@@ -22109,7 +22350,6 @@ function createStage(options) {
   function syncProps() {
     const shapes = selectedShapes();
     const lines = selectedLines();
-    props.hidden = selection.size === 0;
     const visible = {
       stroke: shapes.length > 0,
       fill: shapes.length > 0,
@@ -22118,6 +22358,8 @@ function createStage(options) {
       arrowStart: lines.length > 0,
       arrowEnd: lines.length > 0
     };
+    // Moldura/raia (e marcador/texto) nao tem linha de propriedade: o painel nao abre vazio.
+    props.hidden = selection.size === 0 || !Object.values(visible).some(Boolean);
     for (const [key, row] of Object.entries(propRows)) {
       row.row.hidden = !visible[key];
       const value = row.read();
@@ -22297,14 +22539,25 @@ function createStage(options) {
     if (!box2) return;
     const value = box2.value;
     const target = editTarget;
+    const lane = editLane;
     editBox = null;
     editTarget = null;
+    editLane = null;
     box2.remove();
     if (!save || !target) return;
     const item = findItem(target);
     if (!item) return;
+    const line = value.replace(/\s+/g, " ").trim();
     begin();
-    if (item.type === "connector") item.label = value.replace(/\s+/g, " ").trim();
+    if (item.type === "frame") {
+      // A faixa edita o rotulo da faixa (raia) ou o titulo da moldura, nunca um corpo.
+      if (lane) {
+        const entry = (item.lanes ?? []).find((candidate) => candidate.id === lane);
+        if (entry) entry.label = line;
+      } else {
+        item.title = line;
+      }
+    } else if (item.type === "connector") item.label = line;
     else item.text = { ...item.text ?? {}, value };
     // Caixa de texto sem texto nao desenha nada: sai em vez de ficar invisivel.
     if (item.type === "text" && !String(item.text.value).trim()) {
@@ -22314,27 +22567,46 @@ function createStage(options) {
     commit();
     sync();
   }
-  function startTextEdit(id) {
+  function startTextEdit(id, lane = null) {
     const item = findItem(id);
     if (!item) return;
     closeTextEdit(false);
     let anchor = null;
-    if (item.type === "connector") {
+    let value = "";
+    let aria = "Texto da anotação";
+    if (item.type === "frame") {
+      const box = stageItemRect(item, items);
+      const cell = lane ? stageLaneLayout(item, box).cells.find((entry) => entry.lane.id === lane) : null;
+      if (cell) {
+        // Duplo-clique na celula do rotulo: renomeia a faixa, nao o titulo da moldura.
+        anchor = cell.header;
+        value = String(cell.lane.label ?? "");
+        aria = "Rótulo da faixa";
+      } else {
+        lane = null;
+        anchor = { x: box.x, y: box.y, width: box.width, height: Math.max(32, stageFrameBand(item)) };
+        value = String(item.title ?? "");
+        aria = "Título da moldura";
+      }
+    } else if (item.type === "connector") {
       const ends = stageConnectorEnds(item, items);
       if (!ends) return;
       const at = stagePointAt(stageRoutePath(item, ends.from, ends.to).points, item.labelAt);
       anchor = { x: at.x - 80, y: at.y - 16, width: 160, height: 32 };
+      value = String(item.label ?? "");
+      aria = "Rótulo do conector";
     } else {
       const box = stageItemRect(item, items);
       anchor = { x: box.x, y: box.y, width: box.width, height: Math.max(32, box.height) };
+      value = String(item.text?.value ?? "");
     }
     const screen = screenRect(anchor);
     const areaRect = area.getBoundingClientRect();
     const paint = stagePaint();
     const editor2 = el("textarea");
     editor2.className = "stage-edit";
-    editor2.value = String(item.type === "connector" ? item.label ?? "" : item.text?.value ?? "");
-    editor2.setAttribute("aria-label", item.type === "connector" ? "Rótulo do conector" : "Texto da anotação");
+    editor2.value = value;
+    editor2.setAttribute("aria-label", aria);
     Object.assign(editor2.style, {
       position: "absolute",
       zIndex: "9",
@@ -22370,6 +22642,7 @@ function createStage(options) {
     area.append(editor2);
     editBox = editor2;
     editTarget = id;
+    editLane = lane;
     editor2.focus();
     editor2.select();
   }
@@ -22429,6 +22702,31 @@ function createStage(options) {
     if (!item || item.type === "connector" || item.type === "group" || item.type === "marker") return null;
     return item;
   }
+  // -------------------------------------------------------- contencao (fatia 4)
+  // O vinculo e geometria: quem decide a posse e o centro do item no fim do gesto — arrastar
+  // sobre a moldura entra em children, arrastar para fora sai. Sem moldura embaixo o item
+  // volta a desenhar solto (arquivo anterior, que nunca teve children, segue igual).
+  function detachChild(id) {
+    for (const item of items) {
+      if (item.type !== "frame" || !Array.isArray(item.children)) continue;
+      item.children = item.children.filter((child) => child !== id);
+    }
+  }
+  function reparentItem(id) {
+    const item = findItem(id);
+    if (!item) return;
+    // A moldura nao pode entrar nela mesma nem em quem ela ja contem.
+    const exclude = new Set([id, ...stageFrameDescendants(items, id)]);
+    const owner = stageFrameAtPoint(items, stageBoxCenter(stageItemRect(item, items)), exclude);
+    const current = stageFrameOwnerOf(items, id);
+    if ((current?.id ?? null) === owner) return;
+    detachChild(id);
+    if (!owner) return;
+    const frame = findItem(owner);
+    if (!frame) return;
+    frame.children = frame.children ?? [];
+    if (!frame.children.includes(id)) frame.children.push(id);
+  }
   function endGesture() {
     const active = gesture;
     gesture = null;
@@ -22467,6 +22765,10 @@ function createStage(options) {
       }
       setTool({ kind: "select" });
     }
+    // A posse so muda quando o gesto fecha: no arraste vale o centro do item, e o que nasceu
+    // dentro de uma moldura ja entra nela.
+    if (active.kind === "move") for (const id of active.roots ?? []) reparentItem(id);
+    else if (active.kind === "create" && active.item.type !== "connector") reparentItem(active.item.id);
     commit();
     sync();
     const born = active.kind === "create" ? active.item : null;
@@ -22515,6 +22817,27 @@ function createStage(options) {
       label: "",
       labelAt: 0.5
     };
+  }
+  // Preset do palco: a montagem entra centrada na area visivel e num unico passo de undo
+  // (as secoes aninhadas e a posse dos filhos nascem dentro do mesmo `mutate`).
+  function insertPreset(id) {
+    if (!enabled || !STAGE_PRESETS.some((entry) => entry.id === id)) return;
+    // A area do palco e quem manda no centro, nos dois palcos: o svg do mapa fica oculto
+    // enquanto o organograma abre, entao medir por ele daria o canto da janela.
+    const rect = area.getBoundingClientRect();
+    const point = contentPoint({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 });
+    const size = stageItemsBox(stagePresetItems(id, 0, 0)) ?? { width: 0, height: 0 };
+    const origin = {
+      x: Math.round((point.x - size.width / 2) / STAGE_GRID) * STAGE_GRID,
+      y: Math.round((point.y - size.height / 2) / STAGE_GRID) * STAGE_GRID
+    };
+    const created = stagePresetItems(id, origin.x, origin.y);
+    closeTextEdit(true);
+    clearNodeSelection();
+    mutate(() => {
+      items.push(...created);
+      selection = /* @__PURE__ */ new Set([created[0].id]);
+    });
   }
   function startCreate(event) {
     claimPointer(event);
@@ -22612,16 +22935,16 @@ function createStage(options) {
     }
     return points;
   }
-  function startMove(event, id) {
+  function startMove(event, id, lane = null) {
     claimPointer(event);
     clearNodeSelection();
     const now = Date.now();
-    if (lastClick.id === id && now - lastClick.at < STAGE_DOUBLE_CLICK_MS) {
-      lastClick = { id: null, at: 0 };
-      startTextEdit(id);
+    if (lastClick.id === id && lastClick.lane === lane && now - lastClick.at < STAGE_DOUBLE_CLICK_MS) {
+      lastClick = { id: null, lane: null, at: 0 };
+      startTextEdit(id, lane);
       return;
     }
-    lastClick = { id, at: now };
+    lastClick = { id, lane, at: now };
     const owner = groupOwnerOf(id);
     const rootId = owner ? owner.id : id;
     if (event.shiftKey) {
@@ -22635,7 +22958,9 @@ function createStage(options) {
       setSelection([rootId]);
     }
     if (!selection.size) return;
-    const leaves = selectionLeaves();
+    const roots = selectionLeaves();
+    // A moldura carrega o conteudo: os filhos entram no arraste com o x/y absoluto do dado.
+    const leaves = stageMoveSet(items, roots);
     const boxes = leaves.filter((item) => item.type !== "connector").map((item) => stageItemRect(item, items));
     const frame = boxes.reduce((acc, box) => stageUnionBox(acc, box), null);
     begin();
@@ -22643,6 +22968,7 @@ function createStage(options) {
       kind: "move",
       origin: contentPoint(event),
       moves: leaves.map((item) => ({ item, x: stageNum(item.x, 0), y: stageNum(item.y, 0), points: freePointsOf(item) })),
+      roots: roots.map((item) => item.id),
       frame,
       startItems: cloneValue(items)
     };
@@ -22720,6 +23046,18 @@ function createStage(options) {
       item.y = entry.y + delta.y;
     }
     sync();
+  }
+  // A raia estica junto com a moldura: as faixas crescem na proporcao da borda, a partir das
+  // medidas do inicio do gesto (a cada passo o dado e reescrito do original, nao acumula).
+  function resizeLanes(item, active) {
+    const original = active.startItems.find((entry) => entry.id === item.id);
+    const lanes = Array.isArray(original?.lanes) ? original.lanes : null;
+    if (!lanes || !lanes.length) return;
+    const horizontal = (item.orientation ?? "h") === "h";
+    const base = horizontal ? stageNum(active.frame.width, 0) : Math.max(1, stageNum(active.frame.height, 0) - STAGE_FRAME_BAND);
+    const extent = horizontal ? stageNum(item.w, 0) : Math.max(1, stageNum(item.h, 0) - STAGE_FRAME_BAND);
+    const factor = base > 0 ? extent / base : 1;
+    item.lanes = lanes.map((lane) => ({ ...lane, size: Math.max(STAGE_LANE_MIN, Math.round(stageNum(lane.size, STAGE_LANE_DEFAULT) * factor)) }));
   }
   function resizeFrameBox(frame, handle, pointer, keepRatio) {
     let x = frame.x;
@@ -22807,6 +23145,8 @@ function createStage(options) {
           item.y = box.y;
           item.w = box.width;
           item.h = box.height;
+          // A raia estica junto com a moldura (o conteudo dos filhos e que nao se mexe).
+          if (item.type === "frame") resizeLanes(item, active);
         }
         continue;
       }
@@ -22829,6 +23169,39 @@ function createStage(options) {
         item.h = box.height;
       }
     }
+    sync();
+  }
+  // Divisoria da raia: a pega redimensiona as duas faixas vizinhas. O par vizinho mantem a
+  // soma (uma faixa cresce o que a outra encolhe), senao o resto da raia andaria junto.
+  function startLaneResize(event, id, index) {
+    claimPointer(event);
+    const item = findItem(id);
+    const lanes = item?.type === "frame" && Array.isArray(item.lanes) ? item.lanes : null;
+    if (!lanes || !Number.isInteger(index) || index < 0 || index + 1 >= lanes.length) return;
+    begin();
+    gesture = {
+      kind: "lane",
+      item,
+      index,
+      horizontal: (item.orientation ?? "h") !== "v",
+      origin: contentPoint(event),
+      start: cloneValue(lanes),
+      startItems: cloneValue(items)
+    };
+    bindDrag(laneResizeMove, endGesture);
+  }
+  function laneResizeMove(event) {
+    const active = gesture;
+    if (!active) return;
+    const pointer = contentPoint(event);
+    const delta = (active.horizontal ? pointer.x - active.origin.x : pointer.y - active.origin.y);
+    const first = stageNum(active.start[active.index]?.size, 0);
+    const second = stageNum(active.start[active.index + 1]?.size, 0);
+    const total = first + second;
+    if (total <= STAGE_LANE_MIN * 2) return;
+    const size = stageClamp(first + delta, STAGE_LANE_MIN, total - STAGE_LANE_MIN);
+    active.item.lanes[active.index].size = Math.round(size / STAGE_GRID) * STAGE_GRID;
+    active.item.lanes[active.index + 1].size = total - active.item.lanes[active.index].size;
     sync();
   }
   function startRotate(event, id) {
@@ -22906,7 +23279,8 @@ function createStage(options) {
     item.y = stageNum(item.y, 0) + dy;
   }
   function translateSelection(dx, dy) {
-    const leaves = selectionLeaves();
+    // As setas andam com o mesmo conjunto do arraste: a moldura leva o conteudo.
+    const leaves = stageMoveSet(items, selectionLeaves());
     if (!leaves.length) return;
     mutate(() => {
       for (const item of leaves) translateItem(item, dx, dy);
@@ -22923,7 +23297,7 @@ function createStage(options) {
       copy.id = stageUid(stagePrefixFor(item));
       idMap.set(item.id, copy.id);
       copies.push(copy);
-      if (item.type === "group") {
+      if (item.type === "group" || item.type === "frame") {
         copy.children = (item.children ?? []).map((id) => {
           const child = findItem(id);
           return child ? copyItem(child) : null;
@@ -22961,6 +23335,13 @@ function createStage(options) {
       });
       const exists = (id) => next.some((entry) => entry.id === id);
       next = next.filter((item) => item.type !== "group" || (item.children ?? []).some(exists));
+      // A moldura nao leva o conteudo embora, mas a posse do que sumiu nao pode ficar orfa.
+      for (const id of doomed) {
+        for (const item of next) {
+          if (item.type !== "frame" || !Array.isArray(item.children)) continue;
+          item.children = item.children.filter((child) => child !== id);
+        }
+      }
       items = next;
       selection = /* @__PURE__ */ new Set();
     });
@@ -23032,13 +23413,24 @@ function createStage(options) {
       else startResize(event, kind, id);
       return;
     }
+    const grab = target.closest(".stage-grab");
+    if (grab) {
+      // Pega propria da divisoria: nasce antes do item, senao o corpo da raia a engoliria.
+      startLaneResize(event, grab.dataset.item, Number(grab.dataset.grab));
+      return;
+    }
     const itemNode = target.closest(".stage-item");
     if (itemNode?.dataset.id) {
       const item = findItem(itemNode.dataset.id);
+      // A celula do rotulo identifica a faixa do duplo-clique que renomeia.
+      const lane = target.closest("[data-lane]")?.dataset.lane ?? null;
       const isLinkTool = tool.kind === "link" || tool.kind === "line";
-      if (isLinkTool && (item?.type === "connector" || item?.type === "marker" || !item)) startCreate(event);
+      // O corpo da moldura e area de desenhar: com ferramenta de criacao ativa o arraste
+      // cria dentro dela em vez de arrastar a moldura (senao ela engoliria o ponteiro).
+      if (!isLinkTool && item?.type === "frame" && tool.kind !== "select") startCreate(event);
+      else if (isLinkTool && (item?.type === "connector" || item?.type === "marker" || !item)) startCreate(event);
       else if (isLinkTool) startLink(event, { item: item.id, anchor: "auto" }, item.id);
-      else startMove(event, itemNode.dataset.id);
+      else startMove(event, itemNode.dataset.id, lane);
       return;
     }
     // Com a ferramenta de conector/linha ativa sobre um no da arvore, o conector ja nasce
@@ -23064,7 +23456,7 @@ function createStage(options) {
   // ---------------------------------------------------------------- ciclo de vida
   function sanitizeItems(raw) {
     if (!Array.isArray(raw)) return [];
-    const allowed = ["shape", "connector", "marker", "text", "note", "group"];
+    const allowed = ["shape", "connector", "marker", "text", "note", "group", "frame"];
     const seen = /* @__PURE__ */ new Set();
     const out = [];
     for (const entry of raw) {
@@ -23079,7 +23471,31 @@ function createStage(options) {
       if (type === "group") item.children = (Array.isArray(item.children) ? item.children : []).filter((child) => typeof child === "string" && child !== id);
       out.push(item);
     }
-    return out.filter((item) => item.type !== "group" || item.children.some((id) => out.some((entry) => entry.id === id)));
+    // Moldura e raia: normaliza genero/faixas e limpa a posse (id que nao existe, filho de si
+    // mesmo). Arquivo anterior nao tem frame: nada muda ao reabrir.
+    for (const item of out) {
+      if (item.type !== "frame") continue;
+      item.kind = stageFrameKind(item);
+      item.title = typeof item.title === "string" ? item.title : "";
+      item.children = (Array.isArray(item.children) ? item.children : []).filter((child) => typeof child === "string" && child !== item.id);
+      if (item.kind !== "lane") {
+        delete item.lanes;
+        delete item.orientation;
+        continue;
+      }
+      item.orientation = item.orientation === "v" ? "v" : "h";
+      item.lanes = (Array.isArray(item.lanes) ? item.lanes : []).map((lane) => ({
+        id: lane && typeof lane.id === "string" && lane.id ? lane.id : stageUid("n"),
+        label: lane && typeof lane.label === "string" ? lane.label : "",
+        size: Math.max(STAGE_LANE_MIN, stageNum(lane?.size, STAGE_LANE_DEFAULT))
+      }));
+    }
+    const kept = out.filter((item) => item.type !== "group" || item.children.some((id) => out.some((entry) => entry.id === id)));
+    const lives = (id) => kept.some((entry) => entry.id === id);
+    for (const item of kept) {
+      if (item.type === "frame") item.children = item.children.filter(lives);
+    }
+    return kept;
   }
   function load(annotations) {
     const source = annotations && typeof annotations === "object" && Number(annotations.version) === STAGE_VERSION ? annotations.items : null;
@@ -23096,7 +23512,7 @@ function createStage(options) {
     gesture = null;
     marquee = null;
     guides = [];
-    lastClick = { id: null, at: 0 };
+    lastClick = { id: null, lane: null, at: 0 };
     closeTextEdit(false);
     closeFlyouts();
     setTool({ kind: "select" });
@@ -30959,6 +31375,9 @@ const PATHS = {
   "stage-text": '<path d="M5.5 6.5h13M12 6.5v11.5M9.5 18h5"/>',
   "stage-legend": '<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M7 10h6M7 14h9"/>',
   "stage-frame": '<path d="M7.5 3.5v17M16.5 3.5v17M3.5 7.5h17M3.5 16.5h17"/>',
+  "stage-sheet": '<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 8h17"/><path d="M9.5 8v12.5M9.5 14h11"/>',
+  "stage-lane-h": '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M9.3 9v10.5M14.7 9v10.5"/>',
+  "stage-lane-v": '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M3.5 13.5h17M8 9v10.5"/>',
   "stage-group": '<rect x="3.5" y="3.5" width="10" height="10" rx="1.5"/><rect x="10.5" y="10.5" width="10" height="10" rx="1.5"/>',
   "stage-front": '<path d="M3.5 8.5v12h12"/><rect x="8" y="3.5" width="12.5" height="12.5" rx="1.5"/>',
   "stage-back": '<path d="M20.5 15.5v-12h-12"/><rect x="3.5" y="8" width="12.5" height="12.5" rx="1.5"/>'
@@ -33375,7 +33794,8 @@ stage = createStage({
       orgView.stageChanged();
       return;
     }
-    if (editor.getSnapshot() === savedSnapshot) return;
+    // O desenho e parte do arquivo: mexer so na anotacao tambem suja. Comparar com o
+    // snapshot do mapa seguraria o autosave (ele nao muda quando so a camada desenha).
     autosave.schedule();
   }
 });

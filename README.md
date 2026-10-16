@@ -18,6 +18,27 @@ Login e dados ficam no Appwrite self-hosted da VPS; o navegador carrega a UI e f
 - Não há pasta local de mapas nem banco próprio. O servidor só serve arquivos: nada de estado, e a API key
   nunca chega ao navegador. Exportações (PNG, SVG, PDF, CSV, Excel, POP) acontecem no próprio navegador.
 
+## Desenhar no palco
+
+Além da árvore (mapa mental e organograma), o palco aceita **desenho**: formas geométricas, símbolos de fluxo,
+setas e conectores, marcadores do POP e texto/nota. Uma barra flutuante no rodapé do palco abre cinco grupos —
+**Formas**, **Fluxo**, **Linhas**, **Marcadores** e **Anotação** — e traz as ações de agrupar, duplicar, ordem,
+desfazer/refazer e excluir.
+
+- **Atalhos**: `V` selecionar · `R` retângulo · `O` elipse · `D` losango · `L` linha · `A` seta · `C` conector ·
+  `T` texto · `N` nota · `P` ponto · `M` crítico (e mais no flyout de cada grupo). `Del` exclui, setas movem
+  1px (`Shift` = 10px), `Ctrl+D` duplica, `Ctrl+G` agrupa, `Ctrl+]`/`Ctrl+[` mudam a ordem, `Esc` volta para a
+  seleção. Como as letras têm precedência sobre o "digitar cria um nó" do editor, criar filho e irmão seguem em
+  `Tab` e `Enter`.
+- **Conectores**: arrastar com a ferramenta `C` de uma forma para outra (ou de um **nó** para outro) ancora as
+  pontas — a ponta no nó acompanha o layout sozinha, porque o ponto é calculado no desenho e não gravado. Nó
+  apagado não apaga o conector: ele fica no último ponto, marcado como órfão.
+- **Onde fica**: o desenho é guardado no próprio `.swmap.json`, na chave `annotations` (independente do tipo de
+  mapa), então salvar, versionar, compartilhar e exportar levam tudo junto. Arquivos antigos, sem essa chave,
+  abrem normalmente; mapas com desenho continuam abrindo em versões que ignoram a chave.
+- **Detalhes de projeto** (tokens, posse do teclado, ordem de desenho, export): [`DESIGN.md`](DESIGN.md),
+  seção "Palco de desenho".
+
 ## Configuração
 
 ```bash
