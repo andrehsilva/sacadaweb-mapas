@@ -358,7 +358,7 @@
   }
 
   // Caminho pedido pode estar velho (outra pessoa mexeu): recarrega o índice antes de desistir.
-  async function findEntry(path) {
+  async function findEntry(path, missing) {
     await ensure();
     let found = entryAt(path);
     if (!found) {
@@ -366,7 +366,7 @@
       await ensure();
       found = entryAt(path);
     }
-    if (!found) throw error(LOST_ENTRY, "http");
+    if (!found) throw error(missing || LOST_ENTRY, "http");
     return found;
   }
 
@@ -776,6 +776,48 @@
     return target;
   }
 
+  // Arrastar na árvore: muda só o vínculo com a pasta e devolve o caminho novo.
+  async function moveEntry(path, targetFolderPath) {
+    const { tablesDB } = cloud();
+    const targetPath = targetFolderPath == null ? "" : String(targetFolderPath);
+    const found = await findEntry(path, GONE);
+    const destination = targetPath ? index.foldersByPath.get(targetPath) : null;
+    if (targetPath && !destination) throw error(GONE, "http");
+    const row = found.row;
+    if (found.kind === "folder" && (targetPath === path || targetPath.startsWith(`${path}/`))) {
+      throw error("Não dá para mover uma pasta para dentro dela mesma.", "bad_request");
+    }
+    const destinationId = destination ? destination.$id : null; // null é a raiz
+    if (found.kind === "folder") {
+      const parentId = row.parentId || null;
+      if ((parentId ? folderPath(parentId) || "" : "") === targetPath) return path;
+      if (siblingFolder(destinationId, row.name, row.$id)) throw error(DUPLICATE_NAME, "exists");
+      await call(() => tablesDB.updateRow({
+        databaseId: config.databaseId,
+        tableId: config.foldersTableId,
+        rowId: row.$id,
+        data: { parentId: destinationId } // updateRow só mexe no que vai no data: para a raiz, null
+      }));
+      const next = targetPath ? `${targetPath}/${row.name}` : row.name;
+      moveRevisions(path, next);
+      markStale();
+      return next;
+    }
+    const folderId = row.folderId || null;
+    if ((folderId ? folderPath(folderId) || "" : "") === targetPath) return path;
+    if (siblingMap(destinationId, row.name, row.$id)) throw error(DUPLICATE_NAME, "exists");
+    await call(() => tablesDB.updateRow({
+      databaseId: config.databaseId,
+      tableId: config.mapsTableId,
+      rowId: row.$id,
+      data: { folderId: destinationId }
+    }));
+    const next = targetPath ? `${targetPath}/${row.name}${MAP_EXTENSION}` : `${row.name}${MAP_EXTENSION}`;
+    moveRevisions(path, next);
+    markStale();
+    return next;
+  }
+
   async function duplicateMap(path) {
     const { Appwrite, tablesDB } = cloud();
     const row = await freshMapRow(path);
@@ -962,6 +1004,7 @@
     createMap,
     createFolder,
     renameEntry,
+    moveEntry,
     duplicateMap,
     deleteEntry,
     listVersions,

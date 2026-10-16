@@ -30,3 +30,6 @@ node_modules/
 Thumbs.db
 desktop.ini
 *.log
+
+# copia gerada por tools/pack-brand.py para o runtime Electron
+/resources/icon.png

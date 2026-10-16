@@ -39,13 +39,13 @@ typography:
     fontSize: 19px
     fontWeight: 700
     lineHeight: 1
-    letterSpacing: -0.015em
+    letterSpacing: -0.025em
   brand-word-welcome:
     fontFamily: Outfit
     fontSize: 30px
     fontWeight: 700
     lineHeight: 1
-    letterSpacing: -0.015em
+    letterSpacing: -0.03em
   headline:
     fontFamily: JetBrains Mono
     fontSize: 18px
@@ -199,6 +199,11 @@ A linguagem visual é uma **porta do DESIGN.md do NotAI** (`github.com/andrehsil
 vem do tema de documentação do Oh My Posh: superfícies quase pretas, chrome em monoespaçada, fios de 1px e
 **um único azul** de acento. A marca (SacadaWeb) entra só no lockup, na fonte Outfit.
 
+O lockup segue a assinatura do site (sacadaweb.com.br): **"SacadaWeb" numa palavra, Outfit 700, tracking
+-0.025em, monocromático** (sem dividir o acento no "Web"), com o sufixo do produto "- MAPAS" em JetBrains Mono
+10/600, maiúsculas e tracking 0.08em. Os mesmos parâmetros valem no mestre `build/brand.html`, de onde
+`tools/pack-brand.py` gera o lockup embutido nos exports (`brand.js`).
+
 Público: um único dono técnico no teclado, então densidade ganha de aresidade e toda ação principal tem atalho.
 
 Valores dos dials: `DESIGN_VARIANCE: 4` (UI de produto previsível), `MOTION_INTENSITY: 2` (só feedback de estado,
@@ -252,7 +257,11 @@ para chips e contadores, `rounded.sm` (4px) para keycaps e botões da árvore. R
 - **Chips:** `status-chip` para o estado de gravação ("Salvo", "Salvando…", "Alterações não salvas"); chips de
   tag são de contorno, chips de contagem são preenchidos.
 - **Árvore de mapas:** linhas de 8px de raio, hover em surface, item ativo em `accent-soft` com ícone e texto no
-  acento; ferramentas da linha aparecem no hover/foco.
+  acento; ferramentas da linha aparecem no hover/foco (seguem focáveis por teclado). Os ícones saem da fábrica
+  do próprio renderer (traço 1.5, `currentColor`, 16px, sem preenchimento) — nada de emoji no chrome; os emojis
+  do roteiro de POP (`📄 ⚠️ 🔴 ✅ 📎`) são conteúdo, não chrome. Arrastar uma linha sobre uma pasta (ou sobre a
+  área vazia, para a raiz) move o item: a origem fica `dragging`, o alvo `drop-into` e o alvo inválido
+  `drop-forbidden`. O mesmo movimento tem caminho sem mouse pela ferramenta "Mover para…".
 - **Motion:** 160ms em cor, fio e fundo; 1px de deslocamento no `:active`; nada mais. `prefers-reduced-motion`
   desliga tudo.
 

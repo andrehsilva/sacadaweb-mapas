@@ -28436,12 +28436,21 @@ const PATHS = {
   note: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="14 3 14 9 20 9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/>',
   export: '<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>',
   chevron: '<polyline points="6 9 12 15 18 9"/>',
+  "chevron-right": '<polyline points="9 6 15 12 9 18"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
   moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   "file-text": '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="14 3 14 9 20 9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/>',
   "file-check": '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="14 3 14 9 20 9"/><polyline points="9 15 11 17 15 13"/>',
-  clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/>'
+  clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/>',
+  folder: '<path d="M3 7.5a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6l1.1 1.1a2 2 0 0 0 1.4.6H19a2 2 0 0 1 2 2v6.7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  "folder-open": '<path d="M3 8V6.5a2 2 0 0 1 2-2h3.4a2 2 0 0 1 1.5.7l1 1.2a2 2 0 0 0 1.5.7H18a2 2 0 0 1 2 2v1.4"/><path d="M2.6 19.6h14.9a1.7 1.7 0 0 0 1.64-1.3l1.1-4.7a1.3 1.3 0 0 0-1.27-1.6H6.2a1.7 1.7 0 0 0-1.65 1.3l-1.2 5.1a1.3 1.3 0 0 0 1.25 1.2Z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  "folder-plus": '<path d="M3 7.5a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6l1.1 1.1a2 2 0 0 0 1.4.6H19a2 2 0 0 1 2 2v6.7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10.2v7M8.5 13.7h7"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  move: '<path d="M3 7.5a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6l1.1 1.1a2 2 0 0 0 1.4.6H19a2 2 0 0 1 2 2v6.7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M6.5 13.5h11M13.5 9.8 17.2 13.5 13.5 17.2"/>',
+  trash: '<path d="M3.5 6h17"/><path d="M9 6V4.6A1.6 1.6 0 0 1 10.6 3h2.8A1.6 1.6 0 0 1 15 4.6V6"/><path d="M18.4 6l-.85 13.05A2 2 0 0 1 15.55 21h-7.1a2 2 0 0 1-1.99-1.95L5.6 6"/><path d="M10.2 11v5.5M13.8 11v5.5"/>',
+  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/>'
 };
 function isIconName(name) {
   return name in PATHS;
@@ -30108,7 +30117,9 @@ function createNodeToolbar(editor2, onOpenNote) {
     }
   );
   const note2 = textButton("Nota", "Editar a nota do nó", onOpenNote);
-  const remove = textButton("🗑", "Excluir o nó (Del)", () => editor2.removeActive());
+  const remove = textButton("", "Excluir o nó (Del)", () => editor2.removeActive());
+  remove.innerHTML = iconSvg("trash");
+  remove.setAttribute("aria-label", "Excluir o nó (Del)");
   remove.classList.add("nt-danger");
   const separator = () => el("span", "nt-sep");
   bar.append(
@@ -30312,17 +30323,30 @@ function countConflicts(list) {
 function showConflictBanner(count) {
   const banner = byId("conflict-banner");
   banner.hidden = count === 0;
-  banner.textContent = count === 1 ? "⚠️ 1 possível cópia de conflito do Drive. Passe o mouse sobre o ⚠️ na lista." : `⚠️ ${count} possíveis cópias de conflito do Drive. Passe o mouse sobre o ⚠️ na lista.`;
+  if (count === 0) {
+    banner.replaceChildren();
+    return;
+  }
+  const what = count === 1 ? "1 possível cópia de conflito do Drive" : `${count} possíveis cópias de conflito do Drive`;
+  banner.innerHTML = `${iconSvg("alert")}<span>${what}. Passe o mouse sobre o ícone de alerta na lista.</span>`;
 }
 function matches(entry, needle) {
   if (entry.name.toLowerCase().includes(needle)) return true;
   return entry.kind === "folder" && entry.children.some((child) => matches(child, needle));
 }
-function toolButton(label, title, onClick) {
-  const button2 = el("button", void 0, label);
+function treeIcon(name) {
+  const icon = el("span", "tree-icon");
+  icon.dataset.icon = name;
+  icon.innerHTML = iconSvg(name);
+  return icon;
+}
+function toolButton(icon, action, title, onClick) {
+  const button2 = el("button", "tree-tool");
   button2.type = "button";
+  button2.dataset.action = action;
   button2.title = title;
   button2.setAttribute("aria-label", title);
+  button2.innerHTML = iconSvg(icon);
   button2.addEventListener("click", (event) => {
     event.stopPropagation();
     onClick();
@@ -30330,9 +30354,8 @@ function toolButton(label, title, onClick) {
   return button2;
 }
 function mapIcon(entry) {
-  if (entry.conflictWith) return el("span", "tree-icon", "⚠️");
-  const icon = el("span", "tree-icon");
-  icon.innerHTML = iconSvg(entry.template === "organograma" ? "orgchart" : "mindmap");
+  if (entry.conflictWith) return treeIcon("alert");
+  const icon = treeIcon(entry.template === "organograma" ? "orgchart" : "mindmap");
   icon.title = entry.template === "organograma" ? "Organograma" : "Mapa mental";
   return icon;
 }
@@ -30343,6 +30366,8 @@ function createSidebar(handlers) {
   let entries = [];
   let activePath = null;
   let selectedFolder = "";
+  let dragEntry = null;
+  let dropRow = null;
   function setSelectedFolder(path) {
     selectedFolder = path;
     render2();
@@ -30431,18 +30456,117 @@ function createSidebar(handlers) {
       showError(error);
     }
   }
+  function canDropInto(entry, destination) {
+    if (destination === parentOf(entry.path)) return false;
+    if (destination === entry.path) return false;
+    return !destination.startsWith(`${entry.path}/`);
+  }
+  function folderTargets(entry, list, depth, targets) {
+    for (const child of list) {
+      if (child.kind !== "folder") continue;
+      if (child.path === entry.path || child.path.startsWith(`${entry.path}/`)) continue;
+      targets.push({ path: child.path, label: `${"— ".repeat(depth)}${child.name}` });
+      folderTargets(entry, child.children, depth + 1, targets);
+    }
+    return targets;
+  }
+  function clearDrop() {
+    if (dropRow) dropRow.classList.remove("drop-into", "drop-forbidden");
+    dropRow = null;
+    treeEl.classList.remove("drop-root");
+  }
+  function markDrop(row, forbidden) {
+    if (dropRow && dropRow !== row) dropRow.classList.remove("drop-into", "drop-forbidden");
+    dropRow = row;
+    if (!row) return;
+    row.classList.toggle("drop-into", !forbidden);
+    row.classList.toggle("drop-forbidden", forbidden);
+  }
+  function draggableRow(row, entry) {
+    row.draggable = true;
+    row.addEventListener("dragstart", (event) => {
+      dragEntry = entry;
+      row.classList.add("dragging");
+      event.dataTransfer.setData("text/plain", entry.path);
+      event.dataTransfer.effectAllowed = "move";
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+      dragEntry = null;
+      clearDrop();
+    });
+  }
+  function dropTargetRow(row, destinationOf) {
+    row.addEventListener("dragover", (event) => {
+      if (!dragEntry) return;
+      event.preventDefault();
+      const allowed = canDropInto(dragEntry, destinationOf());
+      event.dataTransfer.dropEffect = allowed ? "move" : "none";
+      markDrop(row, !allowed);
+    });
+    row.addEventListener("dragleave", (event) => {
+      if (row.contains(event.relatedTarget)) return;
+      if (dropRow === row) markDrop(null, false);
+    });
+    row.addEventListener("drop", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const source = dragEntry;
+      const destination = destinationOf();
+      clearDrop();
+      if (!source || !canDropInto(source, destination)) return;
+      void moveTo(source, destination).catch(showError);
+    });
+  }
+  async function moveTo(entry, destination) {
+    const newPath = await window.api.moveEntry(entry.path, destination);
+    if (destination) expanded.add(destination);
+    if (expanded.delete(entry.path)) expanded.add(newPath);
+    saveExpanded(expanded);
+    if (selectedFolder === entry.path || selectedFolder.startsWith(`${entry.path}/`)) {
+      selectedFolder = `${newPath}${selectedFolder.slice(entry.path.length)}`;
+    }
+    handlers.onPathChanged(entry.path, newPath);
+    await refresh();
+    showToast(`"${entry.name}" movido.`);
+  }
+  async function moveDialog(entry) {
+    const destinations = folderTargets(entry, entries, 1, [{ path: "", label: "Raiz (sem pasta)" }]);
+    const destination = await openDialog((dialog, close2) => {
+      dialog.append(el("h2", void 0, `Mover "${entry.name}" para…`));
+      const list = el("div", "move-list");
+      for (const target of destinations) {
+        const item = button(void 0, "move-target");
+        item.dataset.path = target.path;
+        item.disabled = !canDropInto(entry, target.path);
+        item.append(treeIcon("folder"), el("span", "move-label", target.label));
+        item.addEventListener("click", () => close2(target.path));
+        list.append(item);
+      }
+      const cancel = button("Cancelar");
+      cancel.addEventListener("click", () => close2(null));
+      dialog.append(list, actionRow([cancel]));
+      queueMicrotask(() => list.querySelector("button:not(:disabled)")?.focus());
+    });
+    if (destination === null || !canDropInto(entry, destination)) return;
+    await moveTo(entry, destination);
+  }
   function folderRow(folder, needle) {
     const isOpen = needle !== "" || expanded.has(folder.path);
     const wrapper = el("div");
     const row = el("div", `tree-row${selectedFolder === folder.path ? " selected-folder" : ""}`);
-    row.append(el("span", void 0, isOpen ? "▾" : "▸"), el("span", void 0, "📁"));
+    const caret = el("span", "tree-caret");
+    caret.dataset.open = String(isOpen);
+    caret.innerHTML = iconSvg("chevron-right");
+    row.append(caret, treeIcon(isOpen ? "folder-open" : "folder"));
     row.append(el("span", "tree-label", folder.name));
     const tools = el("span", "tree-tools");
     tools.append(
-      toolButton("+", "Novo mapa nesta pasta", () => void createMap(folder.path).catch(showError)),
-      toolButton("📁", "Nova subpasta", () => void createFolder(folder.path).catch(showError)),
-      toolButton("✎", "Renomear", () => void rename(folder).catch(showError)),
-      toolButton("🗑", "Excluir", () => void remove(folder))
+      toolButton("plus", "new-map", "Novo mapa nesta pasta", () => void createMap(folder.path).catch(showError)),
+      toolButton("folder-plus", "new-folder", "Nova subpasta", () => void createFolder(folder.path).catch(showError)),
+      toolButton("pencil", "rename", "Renomear", () => void rename(folder).catch(showError)),
+      toolButton("move", "move", "Mover para…", () => void moveDialog(folder).catch(showError)),
+      toolButton("trash", "delete", "Excluir", () => void remove(folder))
     );
     row.append(tools);
     row.addEventListener("click", () => {
@@ -30451,6 +30575,8 @@ function createSidebar(handlers) {
       saveExpanded(expanded);
       setSelectedFolder(folder.path);
     });
+    draggableRow(row, folder);
+    dropTargetRow(row, () => folder.path);
     wrapper.append(row);
     if (isOpen) wrapper.append(childrenList(folder.children, needle));
     return wrapper;
@@ -30467,18 +30593,21 @@ function createSidebar(handlers) {
     const tools = el("span", "tree-tools");
     tools.append(
       toolButton(
-        "⧉",
+        "copy",
+        "duplicate",
         "Duplicar (criar uma cópia igual)",
         () => void duplicate(entry).catch(showError)
       ),
-      toolButton("✎", "Renomear", () => void rename(entry).catch(showError)),
-      toolButton("🗑", "Excluir", () => void remove(entry))
+      toolButton("pencil", "rename", "Renomear", () => void rename(entry).catch(showError)),
+      toolButton("move", "move", "Mover para…", () => void moveDialog(entry).catch(showError)),
+      toolButton("trash", "delete", "Excluir", () => void remove(entry))
     );
     row.append(tools);
     row.addEventListener("click", () => {
       selectedFolder = parentOf(entry.path);
       handlers.onOpenMap(entry.path);
     });
+    draggableRow(row, entry);
     return row;
   }
   function childrenList(list, needle) {
@@ -30509,6 +30638,25 @@ function createSidebar(handlers) {
   filterEl.addEventListener("input", render2);
   treeEl.addEventListener("click", (event) => {
     if (event.target === treeEl) setSelectedFolder("");
+  });
+  treeEl.addEventListener("dragover", (event) => {
+    if (!dragEntry || event.target.closest(".tree-row")) return;
+    event.preventDefault();
+    const allowed = canDropInto(dragEntry, "");
+    event.dataTransfer.dropEffect = allowed ? "move" : "none";
+    treeEl.classList.toggle("drop-root", allowed);
+  });
+  treeEl.addEventListener("dragleave", (event) => {
+    if (treeEl.contains(event.relatedTarget)) return;
+    treeEl.classList.remove("drop-root");
+  });
+  treeEl.addEventListener("drop", (event) => {
+    if (event.target.closest(".tree-row")) return;
+    event.preventDefault();
+    const source = dragEntry;
+    clearDrop();
+    if (!source || !canDropInto(source, "")) return;
+    void moveTo(source, "").catch(showError);
   });
   return {
     refresh,

@@ -281,7 +281,15 @@ button.icon {
 .sidebar-actions button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  height: 32px;
+  padding: 0 10px;
+  gap: 6px;
+}
+.btn-plus {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
 }
 
 /* a logo antiga saiu: o lockup agora e texto (SacadaWeb - Mapas) */
@@ -293,25 +301,23 @@ button.icon {
 .brand-lockup {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
+/* mesma assinatura do site (sacadaweb.com.br): uma palavra, Outfit 700, tracking -0.025em, mono */
 .brand-word {
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 19px;
   line-height: 1;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.025em;
   color: var(--color-text);
   white-space: nowrap;
 }
-.brand-web {
-  color: var(--color-accent);
-}
 .brand-sub {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: var(--ls-label);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-muted);
   white-space: nowrap;
@@ -343,15 +349,16 @@ button.icon {
   transition: transform var(--motion);
 }
 
-.btn-plus {
-  font-weight: 600;
-}
-
 #tree-filter {
-  background: var(--color-surface);
+  background: var(--color-raised);
   border: 1px solid var(--color-border);
-  padding: 6px 10px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-label);
+}
+#tree-filter:focus-visible {
+  border-color: var(--color-accent);
 }
 #tree-filter::placeholder {
   color: var(--color-text-muted);
@@ -381,20 +388,97 @@ button.icon {
   outline-offset: -1px;
 }
 .tree-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
   color: var(--color-text-muted);
+}
+/* um unico traco para todos os icones do chrome (o CSS de origem usa 2) */
+.tree-icon svg,
+.tree-caret svg,
+.tree-tool svg,
+.btn-plus svg,
+.move-target svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  stroke-width: 1.5;
 }
 .tree-row.active .tree-icon {
   color: var(--color-accent);
 }
-.tree-tools button {
-  padding: 2px 6px;
-  font-size: 11px;
+.tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
   color: var(--color-text-muted);
+}
+.tree-caret svg {
+  transition: transform var(--motion);
+}
+.tree-caret[data-open="true"] svg {
+  transform: rotate(90deg);
+}
+/* ferramentas da linha: aparecem no hover/foco (continuam focaveis por teclado) */
+.tree-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--motion);
+}
+.tree-row:hover .tree-tools,
+.tree-row:focus-within .tree-tools,
+.tree-row.active .tree-tools,
+.tree-row.selected-folder .tree-tools {
+  opacity: 1;
+}
+.tree-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border-color: transparent;
   border-radius: var(--radius-sm);
 }
-.tree-tools button:hover:not(:disabled) {
+.tree-tool:hover:not(:disabled) {
   color: var(--color-text);
-  background: var(--color-surface);
+  background: var(--color-surface-alt);
+  border-color: var(--color-border);
+}
+.tree-tool[data-action="delete"]:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+}
+
+/* arrastar e soltar na arvore */
+.tree-row.dragging {
+  opacity: 0.45;
+}
+.tree-row.drop-into {
+  background: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+.tree-row.drop-forbidden {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 55%, transparent);
+  cursor: not-allowed;
+}
+#tree.drop-root {
+  outline: 1px dashed var(--color-border-strong);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
 }
 .tree-children {
   margin-left: 10px;
@@ -764,6 +848,7 @@ dialog h2 {
 }
 .welcome-card .brand-word {
   font-size: 30px;
+  letter-spacing: -0.03em;
 }
 .welcome-card h1 {
   margin: 0 0 var(--space-2);
@@ -955,4 +1040,61 @@ select {
   margin: var(--space-3) 0 0;
   color: var(--color-danger);
   font-size: var(--fs-label);
+}
+
+/* --------------------------------------------- edicao do texto do no (inline) */
+/* O SDK escreve cor de texto e fundo inline a partir do tema do mapa. Quando ele
+   cai no tema padrao, o campo fica branco com o texto claro e some. Aqui o chrome
+   manda: fundo elevado, texto do tema e caret no acento, nos dois temas. */
+.smm-node-edit-wrap,
+.smm-node-edit-wrap input,
+.smm-node-edit-wrap textarea,
+.smm-node-edit-wrap [contenteditable] {
+  background: var(--color-raised) !important;
+  color: var(--color-text) !important;
+  caret-color: var(--color-accent) !important;
+}
+.smm-node-edit-wrap {
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--color-accent) !important;
+  outline-offset: 2px;
+  box-shadow: var(--shadow) !important;
+}
+.smm-node-edit-wrap ::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+/* -------------------------------------------------------- dialogos de mover */
+.move-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow: auto;
+  margin-top: var(--space-3);
+  padding: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.move-target {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px 8px;
+  color: var(--color-text);
+  background: transparent;
+  border-color: transparent;
+  text-align: left;
+}
+.move-target:hover:not(:disabled),
+.move-target:focus-visible {
+  background: var(--color-raised);
+  border-color: var(--color-border);
+}
+.move-target .tree-icon {
+  color: var(--color-text-muted);
 }
