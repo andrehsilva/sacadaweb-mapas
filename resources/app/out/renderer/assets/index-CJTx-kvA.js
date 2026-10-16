@@ -21472,6 +21472,8 @@ function createStage(options) {
   let selection = /* @__PURE__ */ new Set();
   let tool = { kind: "select" };
   let enabled = false;
+  // Palco servido: "mind" tem svg proprio; "org" desenha dentro do svg do app.
+  let mode = "mind";
   let ownUndo = false;
   let pending = null;
   let gesture = null;
@@ -21480,8 +21482,14 @@ function createStage(options) {
   let lastClick = { id: null, at: 0 };
   let editBox = null;
   let editTarget = null;
+  let swallowClick = false;
   const findItem = (id) => items.find((entry) => entry.id === id);
   const cloneValue = (value) => JSON.parse(JSON.stringify(value));
+  // Palco do organograma: dono do espaco, do transform e do hit-test. Nulo no mapa mental.
+  function orgHost() {
+    if (mode !== "org") return null;
+    return options.getOrg?.() ?? null;
+  }
   // O passo de undo leva itens e selecao: desfazer nao pode largar a posse do teclado.
   const snapshot = () => JSON.stringify({ items, selection: [...selection] });
   function transformOf(mindMap) {
@@ -21498,11 +21506,15 @@ function createStage(options) {
     return node ? node.getBoundingClientRect() : area.getBoundingClientRect();
   }
   function contentPoint(event) {
+    const org = orgHost();
+    if (org) return org.point(event.clientX, event.clientY);
     const rect = canvasRect();
     const transform = transformOf(getMindMap());
     return { x: (event.clientX - rect.left - transform.translateX) / transform.scaleX, y: (event.clientY - rect.top - transform.translateY) / transform.scaleY };
   }
   function screenRect(box) {
+    const org = orgHost();
+    if (org) return org.rect(box);
     const rect = canvasRect();
     const transform = transformOf(getMindMap());
     return {
@@ -21528,8 +21540,24 @@ function createStage(options) {
   layer.style.display = "none";
   area.append(layer);
   function syncView() {
+    // No organograma quem transforma e o proprio <g> do viewport: nao ha espelho a aplicar.
+    if (orgHost()) return;
     const transform = transformOf(getMindMap());
     view.setAttribute("transform", `translate(${stageRound(transform.translateX)} ${stageRound(transform.translateY)}) scale(${stageRound(transform.scaleX)} ${stageRound(transform.scaleY)})`);
+  }
+  // O chrome de edicao (itens, alcas, guias, laco) mora dentro do palco ativo: no mapa mental
+  // dentro do <g> que espelha o transform da vista; no organograma dentro do <g> do buildOrgSvg,
+  // que o viewport ja transforma — mesma coordenada das caixas, sem conversao.
+  function mountChrome() {
+    const org = orgHost();
+    if (org) {
+      const host = org.mount?.() ?? null;
+      // Enquanto o organograma nao renderizou nao ha onde ancorar: a proxima sync ancora.
+      if (host && content.parentNode !== host) host.append(content, overlay);
+      return;
+    }
+    if (view.parentNode !== layer) layer.append(view);
+    if (content.parentNode !== view) view.append(content, overlay);
   }
   // ------------------------------------------------------------------ selecao
   function expandIds(ids) {
@@ -21575,16 +21603,36 @@ function createStage(options) {
     const previous = pending;
     pending = null;
     if (previous === null || previous === snapshot()) return;
-    history.push(previous);
-    ownUndo = true;
+    const org = orgHost();
+    // No organograma o undo e unico e mora no palco: a camada entrega o estado anterior a ele
+    // em vez de empilhar no proprio (o do mapa mental continua valendo so para o mapa mental).
+    if (org) org.remember?.(previous);
+    else {
+      history.push(previous);
+      ownUndo = true;
+    }
     onChange();
   }
-  function restore(snapshotText) {
+  function restore(snapshotText, notify = true) {
     const data = JSON.parse(snapshotText);
     items = data.items;
     selection = new Set(data.selection ?? []);
-    ownUndo = true;
-    onChange();
+    pending = null;
+    if (notify) {
+      ownUndo = true;
+      onChange();
+    }
+    sync();
+  }
+  // O Ctrl+Z do palco do organograma devolve o desenho por aqui (sem reempilhar nem sujar).
+  function applyStageSnapshot(snapshotText) {
+    if (snapshotText) {
+      restore(snapshotText, false);
+      return;
+    }
+    items = [];
+    selection = /* @__PURE__ */ new Set();
+    pending = null;
     sync();
   }
   function undo() {
@@ -21603,8 +21651,14 @@ function createStage(options) {
   function renderItems() {
     content.innerHTML = renderAnnotationsSvg(items, { idPrefix: "stage", paint: stagePaint() });
     const marked = new Set(selectionLeaves().map((item) => item.id));
+    const org = orgHost();
     for (const node of content.querySelectorAll(".stage-item")) {
       node.classList.toggle("is-selected", marked.has(node.dataset.id));
+      // Fora do #stage-layer o CSS da camada nao alcanca: o hit-test e o cursor vem inline.
+      if (org) {
+        node.style.pointerEvents = "all";
+        node.style.cursor = "move";
+      }
     }
     syncView();
   }
@@ -21687,6 +21741,7 @@ function createStage(options) {
   }
   function sync() {
     normalizeSelection();
+    mountChrome();
     renderItems();
     renderOverlay();
     syncProps();
@@ -21968,10 +22023,16 @@ function createStage(options) {
     event.preventDefault();
     event.stopImmediatePropagation();
   }
+  // O cursor de desenho e do palco ativo: no organograma quem cuida e o svg do app (a camada
+  // #stage-layer fica oculta la); no mapa mental quem cuida e o CSS da camada.
+  function applyCursor() {
+    options.getOrg?.()?.cursor?.(mode === "org" && tool.kind !== "select" ? "crosshair" : "");
+  }
   function setTool(next) {
     tool = next;
     layer.classList.toggle("is-creating", next.kind !== "select");
     if (next.kind !== "select") closeFlyouts();
+    applyCursor();
     syncPalette();
   }
   function syncPalette() {
@@ -21982,13 +22043,19 @@ function createStage(options) {
     }
   }
   function runAction(action) {
+    const org = orgHost();
     if (action === "delete") removeSelected();
     else if (action === "duplicate") duplicateSelection();
     else if (action === "front") reorderSelection("front");
     else if (action === "back") reorderSelection("back");
     else if (action === "group") groupSelection();
-    else if (action === "undo") undo();
-    else if (action === "redo") redo();
+    else if (action === "undo") {
+      if (org) org.undo?.();
+      else undo();
+    } else if (action === "redo") {
+      if (org) org.redo?.();
+      else redo();
+    }
   }
   function onKeyDown(event) {
     if (!enabled || event.defaultPrevented) return;
@@ -21998,6 +22065,8 @@ function createStage(options) {
     const key = event.key;
     const lower = key.toLowerCase();
     if (hasModifier) {
+      // No organograma o undo/redo e unico: a tecla segue para o historico do palco.
+      if (mode === "org" && (lower === "z" || lower === "y")) return;
       if (lower === "z" && !event.shiftKey) {
         if (ownUndo && undo()) consume(event);
         return;
@@ -22187,7 +22256,20 @@ function createStage(options) {
     editor2.select();
   }
   // ------------------------------------------------------------------ gestos
+  // O ponteiro e da camada: o palco do app nao inicia o gesto (pan, arraste de caixa) nem
+  // recebe o clique que fecha o gesto — a caixa sob a anotacao nao muda de selecao.
+  function claimPointer(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (mode === "org") swallowClick = true;
+  }
   function bindDrag(onMove, onEnd) {
+    // No organograma a captura cancela o pointerdown (para a vista nao roubar o gesto) e o
+    // navegador entao suprime os eventos de mouse compativeis: o laco do gesto vai por pointer.
+    // No mapa mental nada muda (o gesto nasce no mousedown, onde o cancelamento nao corta o resto).
+    const byPointer = Boolean(orgHost());
+    const moveName = byPointer ? "pointermove" : "mousemove";
+    const upName = byPointer ? "pointerup" : "mouseup";
     const move = (event) => {
       if (event.buttons === 0) {
         stop(event);
@@ -22196,12 +22278,14 @@ function createStage(options) {
       onMove(event);
     };
     const stop = (event) => {
-      window.removeEventListener("mousemove", move, true);
-      window.removeEventListener("mouseup", stop, true);
+      window.removeEventListener(moveName, move, true);
+      window.removeEventListener(upName, stop, true);
+      window.removeEventListener("pointercancel", stop, true);
       onEnd(event);
     };
-    window.addEventListener("mousemove", move, true);
-    window.addEventListener("mouseup", stop, true);
+    window.addEventListener(moveName, move, true);
+    window.addEventListener(upName, stop, true);
+    if (byPointer) window.addEventListener("pointercancel", stop, true);
   }
   function cancelGesture() {
     const active = gesture;
@@ -22315,8 +22399,7 @@ function createStage(options) {
     };
   }
   function startCreate(event) {
-    event.preventDefault();
-    event.stopPropagation();
+    claimPointer(event);
     clearNodeSelection();
     const origin = contentPoint(event);
     begin();
@@ -22372,8 +22455,7 @@ function createStage(options) {
       startCreate(event);
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
+    claimPointer(event);
     clearNodeSelection();
     const pointer = contentPoint(event);
     begin();
@@ -22402,8 +22484,7 @@ function createStage(options) {
     return points;
   }
   function startMove(event, id) {
-    event.preventDefault();
-    event.stopPropagation();
+    claimPointer(event);
     clearNodeSelection();
     const now = Date.now();
     if (lastClick.id === id && now - lastClick.at < STAGE_DOUBLE_CLICK_MS) {
@@ -22439,7 +22520,8 @@ function createStage(options) {
     bindDrag(moveMove, endGesture);
   }
   function collectTargets(exclude) {
-    const boxes = stageNodeBoxes(getMindMap());
+    const org = orgHost();
+    const boxes = org ? org.boxes?.() ?? [] : stageNodeBoxes(getMindMap());
     for (const item of items) {
       if (exclude.has(item.id) || item.type === "group" || item.type === "connector") continue;
       boxes.push(stageItemRect(item, items));
@@ -22534,8 +22616,7 @@ function createStage(options) {
     return { x, y, width: right - x, height: bottom - y };
   }
   function startResize(event, handle, id) {
-    event.preventDefault();
-    event.stopPropagation();
+    claimPointer(event);
     const leaves = selectionLeaves();
     const single = leaves.length === 1 && leaves[0].type !== "connector" ? leaves[0] : null;
     const boxes = leaves.filter((item) => item.type !== "connector").map((item) => stageItemRect(item, items));
@@ -22622,8 +22703,7 @@ function createStage(options) {
     sync();
   }
   function startRotate(event, id) {
-    event.preventDefault();
-    event.stopPropagation();
+    claimPointer(event);
     const item = findItem(id);
     if (!item || item.type === "connector") return;
     const box = stageItemRect(item, items);
@@ -22651,8 +22731,7 @@ function createStage(options) {
     sync();
   }
   function startMarquee(event) {
-    event.preventDefault();
-    event.stopPropagation();
+    claimPointer(event);
     clearNodeSelection();
     const origin = contentPoint(event);
     marquee = { origin, box: null };
@@ -22791,6 +22870,13 @@ function createStage(options) {
     });
   }
   function clearNodeSelection() {
+    const org = orgHost();
+    if (org) {
+      // A caixa selecionada no organograma sai do caminho enquanto a camada desenha (e o
+      // painel dela fecha) — o equivalente ao CLEAR_ACTIVE_NODE do mapa mental.
+      org.clearBoxSelection?.();
+      return;
+    }
     try {
       getMindMap()?.execCommand?.("CLEAR_ACTIVE_NODE");
     } catch (error) {
@@ -22872,10 +22958,12 @@ function createStage(options) {
     setTool({ kind: "select" });
     sync();
   }
+  // Habilita o palco ativo. No organograma a camada #stage-layer fica oculta: o desenho
+  // mora dentro do svg do app, que o viewport ja transforma.
   function setEnabled(next) {
     if (next === enabled) return;
     enabled = next;
-    layer.style.display = next ? "" : "none";
+    layer.style.display = next && mode === "mind" ? "" : "none";
     palette.hidden = !next;
     if (!next) {
       closeTextEdit(false);
@@ -22891,6 +22979,23 @@ function createStage(options) {
       return;
     }
     sync();
+  }
+  function setMode(next) {
+    if (next === mode) return;
+    mode = next;
+    swallowClick = false;
+    layer.style.display = enabled && mode === "mind" ? "" : "none";
+    // No organograma o canvas fica mais estreito (painel da caixa aberto): a paleta quebra
+    // linha em vez de sair da area util do palco.
+    if (mode === "org") {
+      palette.style.flexWrap = "wrap";
+      palette.style.maxWidth = "calc(100% - 2 * var(--space-4))";
+    } else {
+      palette.style.flexWrap = "";
+      palette.style.maxWidth = "";
+    }
+    applyCursor();
+    if (enabled) sync();
   }
   // ------------------------------------------------------------ export (png/pdf)
   function adjustExportFrame(rootNode, container, list) {
@@ -22948,6 +23053,21 @@ function createStage(options) {
     }));
   }, { passive: false });
   area.addEventListener("mousedown", onAreaMouseDown, true);
+  // No organograma a vista (pan) e o arraste de caixa nascem no pointerdown do svg do app,
+  // que acontece antes do mousedown: para o gesto da camada ter precedencia, o mesmo
+  // despacho roda na captura do pointerdown (so nesse palco; o mapa mental segue no mousedown).
+  area.addEventListener("pointerdown", (event) => {
+    if (mode !== "org") return;
+    swallowClick = false;
+    onAreaMouseDown(event);
+  }, true);
+  // O clique que fecha o gesto nao pertence ao palco do app: sem isto a caixa sob a anotacao
+  // trocaria de selecao depois de mover/redimensionar/rotacionar/criar.
+  area.addEventListener("click", (event) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    event.stopPropagation();
+  }, true);
   window.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("mousedown", (event) => {
     const target = stageElement(event.target);
@@ -22970,16 +23090,40 @@ function createStage(options) {
       ownUndo = false;
     });
   }
+  // ------------------------------------------------- export do organograma (fatia 2)
+  // Markup do desenho para entrar no <g> do buildOrgSvg: mesma funcao unica de desenho,
+  // agora em string para o SVG/PNG/PDF do palco (o render interativo usa os nos vivos).
+  function orgMarkup(idPrefix) {
+    const list = items.filter((item) => item.type !== "group");
+    if (!list.length) return "";
+    return `<g class="stage-org">${renderAnnotationsSvg(list, { idPrefix, paint: stagePaint() })}</g>`;
+  }
+  function bounds() {
+    return items.length ? stageItemsBox(items) : null;
+  }
   window.addEventListener("resize", syncView);
   syncPalette();
+  // O organograma e quem manda no desenho: a camada entrega os ganchos que ele usa
+  // (reinjetar depois do render, devolver o snapshot no undo, exportar e encaixar).
+  options.getOrg?.()?.attach?.({
+    sync: () => sync(),
+    apply: (snapshotText) => applyStageSnapshot(snapshotText),
+    markup: (idPrefix) => orgMarkup(idPrefix),
+    bounds: () => bounds(),
+    // Sem desenho o estado e nulo (o palco nao guarda um stack vazio de anotacoes).
+    snapshot: () => (items.length ? snapshot() : null)
+  });
   return {
     setEnabled,
+    setMode,
     load,
     reset() {
       load(null);
     },
     hasItems: () => items.length > 0,
     getData: () => ({ version: STAGE_VERSION, items: cloneValue(items) }),
+    orgMarkup,
+    bounds,
     injectExport(svg2) {
       const list = items.filter((item) => item.type !== "group");
       if (!list.length) return;
@@ -30305,10 +30449,38 @@ function buildOrgSvg(data2, options) {
     MARGIN + contentHeight + CAPTION_GAP,
     colors
   ) : "";
+  // A camada de anotacao (fatia 2) entra dentro do mesmo <g> transladado das caixas: casa
+  // coordenadas com o layout e sai no export sem conversao. Vem vazia no render interativo,
+  // onde a camada e injetada viva (senao o desenho apareceria duas vezes).
+  const stageMarkup = options.stageMarkup ?? "";
+  const originX = MARGIN + offsetX + (isVertical ? shift : 0);
+  const originY = MARGIN + (isVertical ? 0 : shift);
   return {
-    inner: `<g transform="translate(${MARGIN + offsetX + (isVertical ? shift : 0)} ${MARGIN + (isVertical ? 0 : shift)})">${edges}${links}${boxes}${handles}</g>${captionSvg}`,
+    inner: `<g transform="translate(${originX} ${originY})">${edges}${links}${boxes}${handles}${stageMarkup}</g>${captionSvg}`,
     width: outerWidth + MARGIN * 2,
-    height: contentHeight + (caption ? CAPTION_GAP + caption.height : 0) + MARGIN * 2
+    height: contentHeight + (caption ? CAPTION_GAP + caption.height : 0) + MARGIN * 2,
+    // Origem do conteudo dentro do svg e caixa do organograma no espaco do conteudo:
+    // a camada usa as duas para converter ponteiro/tela e para crescer a folha no export.
+    origin: { x: originX, y: originY },
+    content: { width: contentWidth, height: contentHeight },
+    positions: layout2.positions
+  };
+}
+// O desenho pode cair fora da caixa do organograma: a folha exportada cresce para caber as
+// anotacoes (o interno todo anda o necessario; as coordenadas gravadas no arquivo nao mudam).
+function expandOrgSheet(built, frame) {
+  if (!frame) return built;
+  const left = Math.max(0, -frame.x);
+  const top = Math.max(0, -frame.y);
+  const right = Math.max(0, frame.x + frame.width - built.content.width);
+  const bottom = Math.max(0, frame.y + frame.height - built.content.height);
+  if (!left && !top && !right && !bottom) return built;
+  return {
+    ...built,
+    // So anda o que precisa: desenho a direita/abaixo apenas estica a folha.
+    inner: left || top ? `<g transform="translate(${stageRound(left)} ${stageRound(top)})">${built.inner}</g>` : built.inner,
+    width: built.width + left + right,
+    height: built.height + top + bottom
   };
 }
 function wrapSvgDocument(chart, background) {
@@ -31223,7 +31395,10 @@ html, body { margin: 0; font-family: 'JetBrains Mono', 'Cascadia Code', Consolas
 function buildPdfHtml(data2, options) {
   const date = DATE_FORMAT.format(options.exportedAt);
   const logo = options.logoDataUrl?.startsWith("data:image/") ? `<img class="page-logo" src="${escapeXml(options.logoDataUrl)}" alt="SacadaWeb - Mapas">` : "";
-  const built = buildOrgSvg(data2, { measure: options.measure, theme: "light", interactive: false });
+  const built = expandOrgSheet(
+    buildOrgSvg(data2, { measure: options.measure, theme: "light", interactive: false, stageMarkup: options.stageMarkup ?? "" }),
+    options.stageFrame ?? null
+  );
   const page = `<section class="page"><div class="page-header"><div class="page-brand">${logo}<h1>${escapeXml(options.mapTitle)}</h1></div><span class="page-meta">${escapeXml(date)}</span></div><div class="page-chart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${built.width} ${built.height}" preserveAspectRatio="xMidYMin meet">${built.inner}</svg></div></section>`;
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${escapeXml(options.mapTitle)}</title><style>${STYLES}</style></head><body>${page}</body></html>`;
 }
@@ -31319,6 +31494,9 @@ function createViewport(svg2, layer, options = {}) {
       apply();
     },
     getScale: () => scale,
+    // Transform que o viewport aplica no <g> da vista: a camada do palco usa para
+    // converter ponteiro e tela no espaco do conteudo do organograma.
+    getTransform: () => ({ x: x2, y: y2, scale }),
     wasDragged: () => dragged
   };
 }
@@ -31348,8 +31526,9 @@ function createOrgView(container, panelHost, callbacks) {
   const layer = document.createElementNS(SVG_NS, "g");
   svg2.append(layer);
   const viewport = createViewport(svg2, layer, {
-    // Arrastar uma caixa move a caixa; arrastar o fundo move a vista.
-    canStartPan: (event) => !event.target.closest(".org-node, .org-link-handle, .org-link-hit")
+    // Arrastar uma caixa move a caixa; arrastar o fundo move a vista. A camada de anotacao
+    // tem gesto proprio (a captura em #canvas-wrap a intercepta antes), nunca o pan.
+    canStartPan: (event) => !event.target.closest(".org-node, .org-link-handle, .org-link-hit, .stage-org")
   });
   const measure = createMeasure();
   const history = createHistory();
@@ -31484,11 +31663,80 @@ function createOrgView(container, panelHost, callbacks) {
     onToggleSide: () => setRailCollapsed(!isRailCollapsed)
   });
   container.replaceChildren(svg2, rail.element, panelToggle);
+  // ------------------------------------------------ camada de anotacao (fatia 2)
+  // O desenho nao entra em data2: e um <g> proprio dentro do <g> que o buildOrgSvg ja
+  // translada, entao o viewport (pan/zoom) e o export levam o desenho junto, sem conversao
+  // de coordenadas. render2 recria o conteudo do layer a cada render: reinjete depois dele.
+  let stageNode = null;
+  let stageHooks = null;
+  let stageOrigin = { x: 0, y: 0 };
+  let stageBoxes = [];
+  const mountStageLayer = () => {
+    const inner = layer.firstElementChild;
+    if (!inner) return null;
+    if (!stageNode) {
+      stageNode = document.createElementNS(SVG_NS, "g");
+      stageNode.setAttribute("class", "stage-org");
+    }
+    inner.append(stageNode);
+    return stageNode;
+  };
+  const stageHost = {
+    mount: mountStageLayer,
+    attach(hooks) {
+      stageHooks = hooks;
+    },
+    markup: (prefix) => stageHooks?.markup?.(prefix) ?? "",
+    bounds: () => stageHooks?.bounds?.() ?? null,
+    snapshot: () => stageHooks?.snapshot?.() ?? null,
+    // Ponteiro/tela <-> conteudo do organograma pelo mesmo caminho da vista (viewport + origem).
+    point(clientX, clientY) {
+      const rect = svg2.getBoundingClientRect();
+      const t = viewport.getTransform();
+      const scale = t.scale || 1;
+      return {
+        x: (clientX - rect.left - t.x) / scale - stageOrigin.x,
+        y: (clientY - rect.top - t.y) / scale - stageOrigin.y
+      };
+    },
+    rect(box) {
+      const rect = svg2.getBoundingClientRect();
+      const t = viewport.getTransform();
+      return {
+        left: rect.left + t.x + (stageOrigin.x + box.x) * t.scale,
+        top: rect.top + t.y + (stageOrigin.y + box.y) * t.scale,
+        width: box.width * t.scale,
+        height: box.height * t.scale,
+        scale: t.scale
+      };
+    },
+    boxes: () => stageBoxes,
+    clearBoxSelection() {
+      select(null);
+    },
+    // A camada entrega o estado anterior: o historico do palco guarda caixa e desenho juntos.
+    remember(previous) {
+      history.push({ chart: data2, stage: previous });
+    },
+    undo: () => undoRedo("undo"),
+    redo: () => undoRedo("redo"),
+    cursor(value) {
+      svg2.style.cursor = value;
+    }
+  };
+  // O Ctrl+Z/Y do palco desfaz tambem o desenho: o snapshot leva as anotacoes.
+  const historyState = () => ({ chart: data2, stage: stageHost.snapshot() });
   const render2 = (refit) => {
     if (!data2) return;
     const built = buildOrgSvg(data2, { measure, theme: theme2, selectedId, selectedLink });
     layer.innerHTML = built.inner;
     viewport.setContentSize(built.width, built.height, refit);
+    // O inner foi recriado: a camada de anotacao volta para dentro do <g> transladado e o
+    // palco usa as medidas novas (origem do conteudo e caixas) para o hit-test e o encaixe.
+    stageOrigin = built.origin;
+    stageBoxes = [...built.positions.values()].map((box) => ({ x: box.x, y: box.y, width: box.width, height: box.height }));
+    mountStageLayer();
+    stageHooks?.sync?.();
     rail.update(
       levelCount(),
       data2.settings.hiddenLevels,
@@ -31501,7 +31749,7 @@ function createOrgView(container, panelHost, callbacks) {
   const apply = (next2, options = {}) => {
     if (!data2 || next2 === data2) return;
     const isSameEdit = options.coalesceKey !== void 0 && options.coalesceKey === lastCoalesceKey;
-    if (!isSameEdit) history.push(data2);
+    if (!isSameEdit) history.push(historyState());
     lastCoalesceKey = options.coalesceKey ?? null;
     data2 = next2;
     if (options.select !== void 0) selectedId = options.select;
@@ -31634,12 +31882,15 @@ function createOrgView(container, panelHost, callbacks) {
     if (!data2) return;
     stopInlineEdit();
     endLinkMode();
-    const restored = direction === "undo" ? history.undo(data2) : history.redo(data2);
+    const restored = direction === "undo" ? history.undo(historyState()) : history.redo(historyState());
     if (!restored) return;
-    data2 = restored;
+    const chartChanged = restored.chart !== data2;
+    data2 = restored.chart;
     lastCoalesceKey = null;
     if (!nodeById(selectedId)) selectedId = null;
-    render2(false);
+    // Mutacao so de desenho nao mexe no organograma: nada de remontar o svg do app.
+    stageHooks?.apply?.(restored.stage ?? null);
+    if (chartChanged) render2(false);
     notifyHistory();
     callbacks.onChange();
   };
@@ -31812,7 +32063,11 @@ function createOrgView(container, panelHost, callbacks) {
   });
   const buildForExport = () => {
     if (!data2) throw new Error("Nenhum organograma aberto.");
-    const built = buildOrgSvg(data2, { measure, theme: "light", interactive: false });
+    // Com interactive: false o mesmo <g> do buildOrgSvg ja leva o desenho: o PNG/PDF/SVG saem.
+    const built = expandOrgSheet(
+      buildOrgSvg(data2, { measure, theme: "light", interactive: false, stageMarkup: stageHost.markup("org-export") }),
+      stageHost.bounds()
+    );
     return {
       document: wrapSvgDocument(built, EXPORT_BACKGROUND),
       width: built.width,
@@ -31836,7 +32091,13 @@ function createOrgView(container, panelHost, callbacks) {
       if (!data2) throw new Error("Nenhum organograma aberto.");
       return data2;
     },
-    getSnapshot: () => data2 ? JSON.stringify(data2) : "",
+    getSnapshot: () => data2 ? JSON.stringify(historyState()) : "",
+    stageHost,
+    // Mutacao da camada: empilha no historico do palco (via remember) e agenda o autosave.
+    stageChanged() {
+      notifyHistory();
+      callbacks.onChange();
+    },
     setTheme(nextTheme) {
       theme2 = nextTheme;
       render2(false);
@@ -31877,7 +32138,14 @@ function createOrgView(container, panelHost, callbacks) {
     },
     exportPdfHtml(mapTitle) {
       if (!data2) throw new Error("Nenhum organograma aberto.");
-      return buildPdfHtml(data2, { measure, mapTitle, exportedAt: /* @__PURE__ */ new Date(), logoDataUrl });
+      return buildPdfHtml(data2, {
+        measure,
+        mapTitle,
+        exportedAt: /* @__PURE__ */ new Date(),
+        logoDataUrl,
+        stageMarkup: stageHost.markup("org-export"),
+        stageFrame: stageHost.bounds()
+      });
     }
   };
 }
@@ -32934,9 +33202,17 @@ const nodeToolbar = createNodeToolbar(editor, () => notePanel.focus());
 stage = createStage({
   area: byId("canvas-wrap"),
   getMindMap: () => editor.getMindMap(),
+  // O palco do organograma desenha dentro do svg do app: a camada fala com ele por aqui.
+  getOrg: () => orgView.stageHost,
   // Qualquer mutacao da camada marca sujo e entra no autosave que ja existe.
   onChange: () => {
-    if (!openMap || openKind !== "mindmap") return;
+    if (!openMap) return;
+    // No organograma o desenho divide o historico com as caixas: o palco e quem sabe disso.
+    if (openKind === "org") {
+      orgView.stageChanged();
+      return;
+    }
+    if (editor.getSnapshot() === savedSnapshot) return;
     autosave.schedule();
   }
 });
@@ -33006,7 +33282,9 @@ function showMapArea(isOpen) {
   minimap.setMapOpen(isOpen && !isOrg);
   layoutSelect.disabled = !isOpen;
   if (!isOpen || isOrg) nodeToolbar.hide();
-  stage.setEnabled(isOpen && !isOrg);
+  // O palco de desenho vale nos dois palcos: a camada muda de casa, nao de regra.
+  stage.setMode(isOrg ? "org" : "mind");
+  stage.setEnabled(isOpen);
   if (!isOpen) setSaveState("idle");
 }
 function closeMap() {
