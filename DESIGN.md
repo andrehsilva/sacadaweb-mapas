@@ -265,6 +265,31 @@ para chips e contadores, `rounded.sm` (4px) para keycaps e botões da árvore. R
 - **Motion:** 160ms em cor, fio e fundo; 1px de deslocamento no `:active`; nada mais. `prefers-reduced-motion`
   desliga tudo.
 
+## Palco de desenho
+
+O palco do mapa mental aceita uma **camada de anotação** (formas geométricas, símbolos de fluxo, setas e
+conectores, marcadores do POP, texto e nota) desenhada sobre a árvore e guardada no próprio arquivo, com a
+mesma linguagem do resto: superfície elevada, ícones de traço 1.5, um único acento.
+
+- **Barra flutuante** no rodapé do palco (arrastável), com cinco grupos em flyout — Formas, Fluxo, Linhas,
+  Marcadores, Anotação — e as ações de agrupar, duplicar, ordem e excluir. O botão do grupo assume o ícone da
+  ferramenta ativa; a ferramenta ativa fica em `accent-soft` com o acento no ícone.
+- **Atalhos**: `V` selecionar · `R` retângulo · `O` elipse · `D` losango · `L` linha · `A` seta · `C` conector ·
+  `T` texto · `N` nota · `P` ponto · `M` crítico; `Del` exclui (levando os conectores ancorados), setas movem
+  1px (`Shift` = 10px), `Ctrl+D` duplica, `Ctrl+G` agrupa, `Ctrl+]`/`Ctrl+[` ordem, `Esc` volta para a seleção,
+  `Ctrl+Z`/`Ctrl+Y` desfazem e refazem.
+- **Seleção**: contorno tracejado no acento, oito alças de redimensionar, alça de rotação (`Shift` = 15°) e três
+  alças de conexão. O laço de seleção é `Shift`+arrastar no vazio, para não roubar o arraste/pan do mapa.
+- **Posse do teclado**: com um nó do mapa selecionado (e nenhuma anotação por perto), `Del`, setas e `Ctrl+Z`
+  continuam sendo do mapa; a camada só consome o que é dela, e nunca com editor de texto aberto.
+- **Conteúdo x chrome**: a pintura dos itens é **inline**, resolvida dos tokens na hora de desenhar, porque o
+  SVG exportado é serializado fora do documento e não carrega a folha de estilo; o chrome de edição (camada,
+  alças, guias, laço, paleta, painel de propriedades) vive em classes CSS. Trocar de tema redesenha a camada.
+- **Persistência e export**: `annotations: { version, items }` no `.swmap.json` (chave ausente = sem desenho),
+  com **nome de token** no dado e hex só no markup gerado. O desenho sai no PNG/PDF do mapa mental pela injeção
+  no `handleBeingExportSvg` da lib, viaja no arquivo de compartilhar e faz a moldura do export crescer para
+  caber. O organograma entra na fatia seguinte (mesma camada, export pelo SVG do próprio app).
+
 ## Onde o design vive no código
 
 | Camada | Arquivo | O que muda ali |

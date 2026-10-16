@@ -1098,3 +1098,238 @@ select {
 .move-target .tree-icon {
   color: var(--color-text-muted);
 }
+
+/* ------------------------------------------------- palco de desenho (fatia 1) */
+/* A PINTURA DOS ITENS vai inline no markup (precisa viajar no SVG exportado, que e
+   serializado fora do documento e nao carrega folha de estilo). Aqui fica so o chrome
+   de edicao: camada, alcas, guias, paleta flutuante e painel de propriedades. */
+#stage-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 4;
+  overflow: visible;
+  pointer-events: none;
+}
+#stage-layer.is-creating {
+  cursor: crosshair;
+  pointer-events: auto;
+}
+#stage-layer.is-marquee {
+  cursor: default;
+  pointer-events: auto;
+}
+#stage-layer .stage-item {
+  cursor: move;
+  pointer-events: all;
+}
+#stage-layer .stage-handle {
+  pointer-events: all;
+}
+.stage-outline {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+.stage-handle {
+  fill: var(--color-raised);
+  stroke: var(--color-accent);
+  stroke-width: 1;
+}
+.stage-handle:hover {
+  fill: var(--color-accent);
+}
+.stage-handle[data-handle="nw"],
+.stage-handle[data-handle="se"] {
+  cursor: nwse-resize;
+}
+.stage-handle[data-handle="ne"],
+.stage-handle[data-handle="sw"] {
+  cursor: nesw-resize;
+}
+.stage-handle[data-handle="n"],
+.stage-handle[data-handle="s"] {
+  cursor: ns-resize;
+}
+.stage-handle[data-handle="e"],
+.stage-handle[data-handle="w"] {
+  cursor: ew-resize;
+}
+.stage-handle[data-handle="rot"] {
+  cursor: grab;
+}
+.stage-guide {
+  stroke: var(--color-accent);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  opacity: 0.85;
+  pointer-events: none;
+}
+.stage-marquee {
+  fill: var(--color-accent-soft);
+  stroke: var(--color-accent);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+/* paleta flutuante do palco */
+.stage-tools {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  z-index: 8;
+  background: var(--color-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.stage-tools.is-dragging {
+  cursor: grabbing;
+}
+.stage-tool,
+.stage-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-md);
+}
+.stage-tool:hover:not(:disabled),
+.stage-item:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-alt);
+  border-color: var(--color-border);
+}
+.stage-tool[aria-pressed="true"],
+.stage-item[aria-pressed="true"] {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+.stage-tool svg,
+.stage-item svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.5;
+}
+.stage-tool[data-action="delete"]:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+}
+.stage-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--color-border);
+}
+.stage-group {
+  position: relative;
+  display: inline-flex;
+}
+.stage-flyout {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: repeat(6, 32px);
+  gap: 2px;
+  padding: var(--space-2);
+  z-index: 9;
+  background: var(--color-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.stage-flyout-title {
+  grid-column: 1 / -1;
+  padding: 0 2px var(--space-1);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+}
+
+/* propriedades do item selecionado */
+.stage-props {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 216px;
+  padding: var(--space-3);
+  z-index: 8;
+  background: var(--color-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.stage-prop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.stage-prop-label {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+}
+.stage-props button {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.stage-swatches {
+  display: inline-flex;
+  gap: 4px;
+}
+.stage-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface-alt);
+}
+.stage-swatch[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  box-shadow: var(--halo);
+}
+.stage-swatch[data-token="accent"] { background: var(--color-accent); }
+.stage-swatch[data-token="text"] { background: var(--color-text); }
+.stage-swatch[data-token="muted"] { background: var(--color-text-muted); }
+.stage-swatch[data-token="danger"] { background: var(--color-danger); }
+.stage-swatch[data-token="warning"] { background: var(--color-warning); }
+.stage-swatch[data-token="success"] { background: var(--color-success); }
+.stage-swatch[data-token="none"] {
+  background: repeating-linear-gradient(45deg, transparent 0 4px, var(--color-border-strong) 4px 5px);
+}
+
+@media (max-width: 1360px) {
+  .stage-props {
+    min-width: 184px;
+    padding: var(--space-2);
+  }
+  .stage-tools {
+    gap: 0;
+  }
+}

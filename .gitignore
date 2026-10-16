@@ -33,3 +33,6 @@ desktop.ini
 
 # copia gerada por tools/pack-brand.py para o runtime Electron
 /resources/icon.png
+
+# Python (tools/pack-brand.py)
+__pycache__/

@@ -20864,6 +20864,2138 @@ function noteInfo(node) {
     note: String(node.getData("note") ?? "")
   };
 }
+/* --------------------------------------------------------------- palco de desenho */
+// Fatia 1 do palco (mapa mental). O desenho vive no espaco do conteudo do mapa — o
+// mesmo de node.left/top — e o <g class="stage-view"> espelha o transform do view.
+// A pintura dos itens vai inline, resolvida dos tokens na hora de desenhar: o SVG
+// exportado e serializado fora do documento e nao leva folha de estilo.
+const STAGE_NS = "http://www.w3.org/2000/svg";
+const STAGE_VERSION = 1;
+const STAGE_GRID = 8;
+const STAGE_MIN_SIZE = 6;
+const STAGE_SNAP = 4;
+const STAGE_ROT_OFFSET = 26;
+const STAGE_LINK_OFFSET = 18;
+const STAGE_ROT_STEP = 15;
+const STAGE_EXPORT_MARGIN = 8;
+const STAGE_UNDO_LIMIT = 100;
+const STAGE_DOUBLE_CLICK_MS = 400;
+const STAGE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const STAGE_LINK_ANCHORS = ["e", "w", "s"];
+const STAGE_TOKEN_VARS = {
+  accent: "--color-accent",
+  "accent-strong": "--color-accent-strong",
+  text: "--color-text",
+  muted: "--color-text-muted",
+  surface: "--color-surface",
+  "surface-alt": "--color-surface-alt",
+  raised: "--color-raised",
+  border: "--color-border",
+  "border-strong": "--color-border-strong",
+  danger: "--color-danger",
+  warning: "--color-warning",
+  success: "--color-success"
+};
+const STAGE_SWATCH_TOKENS = ["accent", "text", "muted", "danger", "warning", "success", "none"];
+const STAGE_TOKEN_LABELS = {
+  accent: "Acento",
+  text: "Texto",
+  muted: "Discreto",
+  danger: "Perigo",
+  warning: "Atenção",
+  success: "Sucesso",
+  none: "Sem cor"
+};
+const STAGE_DASHES = { solid: "", dashed: "6 4", dotted: "1.5 3" };
+const STAGE_DASH_LABELS = { solid: "Sólido", dashed: "Tracejado", dotted: "Pontilhado" };
+const STAGE_WIDTHS = [1, 1.5, 2.5];
+const STAGE_ARROW_LABELS = { none: "Sem ponta", arrow: "Seta", dot: "Ponto" };
+const STAGE_MARKER_COLOR = { ponto: "accent", numero: "accent", critico: "danger", erro: "warning", conferido: "success", anexo: "muted" };
+const STAGE_MARKER_LABELS = { ponto: "Ponto", numero: "Número", critico: "Crítico", erro: "Erro", conferido: "Conferido", anexo: "Anexo" };
+const STAGE_GEO_SHAPES = [
+  { id: "rect", label: "Retângulo", icon: "stage-rect", key: "R" },
+  { id: "round", label: "Retângulo arredondado", icon: "stage-round" },
+  { id: "ellipse", label: "Elipse", icon: "stage-ellipse", key: "O" },
+  { id: "circle", label: "Círculo", icon: "stage-circle" },
+  { id: "diamond", label: "Losango", icon: "stage-diamond", key: "D" },
+  { id: "parallelogram", label: "Paralelogramo", icon: "stage-parallelogram" },
+  { id: "trapezoid", label: "Trapézio", icon: "stage-trapezoid" },
+  { id: "hexagon", label: "Hexágono", icon: "stage-hexagon" },
+  { id: "triangle", label: "Triângulo", icon: "stage-triangle" },
+  { id: "cylinder", label: "Cilindro", icon: "stage-cylinder" },
+  { id: "cloud", label: "Nuvem", icon: "stage-cloud" },
+  { id: "arrow-block", label: "Bloco de seta", icon: "stage-arrow-block" }
+];
+const STAGE_FLOW_SHAPES = [
+  { id: "terminal", label: "Início/Fim", icon: "stage-terminal" },
+  { id: "process", label: "Processo", icon: "stage-process" },
+  { id: "decision", label: "Decisão", icon: "stage-decision" },
+  { id: "document", label: "Documento", icon: "stage-document" },
+  { id: "data", label: "Dados", icon: "stage-parallelogram" },
+  { id: "database", label: "Banco de dados", icon: "stage-database" },
+  { id: "delay", label: "Espera", icon: "stage-delay" },
+  { id: "subprocess", label: "Subprocesso", icon: "stage-subprocess" },
+  { id: "connector", label: "Conector", icon: "stage-connector" },
+  { id: "page", label: "Conector de página", icon: "stage-page" },
+  { id: "actor", label: "Ator", icon: "stage-actor" }
+];
+const STAGE_ANNOTATION_SHAPES = [
+  { id: "legend", label: "Legenda", icon: "stage-legend" },
+  { id: "frame", label: "Moldura", icon: "stage-frame" }
+];
+const STAGE_SHAPE_LABELS = [...STAGE_GEO_SHAPES, ...STAGE_FLOW_SHAPES, ...STAGE_ANNOTATION_SHAPES].reduce((acc, entry) => {
+  acc[entry.id] = entry.label;
+  return acc;
+}, {});
+const STAGE_LINES = [
+  { id: "line", label: "Linha", icon: "stage-line", key: "L", route: "straight", arrowEnd: "none", dash: "solid" },
+  { id: "arrow", label: "Seta", icon: "stage-arrow", key: "A", route: "straight", arrowEnd: "arrow", dash: "solid" },
+  { id: "arrow-double", label: "Seta dupla", icon: "stage-arrow-double", route: "straight", arrowStart: "arrow", arrowEnd: "arrow", dash: "solid" },
+  { id: "elbow", label: "Cotovelo", icon: "stage-elbow", route: "elbow", arrowEnd: "arrow", dash: "solid" },
+  { id: "curve", label: "Curva", icon: "stage-curve", route: "curve", arrowEnd: "arrow", dash: "solid" },
+  { id: "dashed", label: "Tracejada", icon: "stage-dashed", route: "straight", arrowEnd: "arrow", dash: "dashed" },
+  { id: "dotted", label: "Pontilhada", icon: "stage-dotted", route: "straight", arrowEnd: "arrow", dash: "dotted" },
+  { id: "loopback", label: "Retorno", icon: "stage-loopback", route: "loopback", arrowEnd: "arrow", dash: "solid" }
+];
+const STAGE_MARKERS = [
+  { id: "ponto", label: "Ponto", icon: "stage-ponto", key: "P" },
+  { id: "numero", label: "Número", icon: "stage-numero" },
+  { id: "critico", label: "Crítico", icon: "alert", key: "M" },
+  { id: "erro", label: "Erro", icon: "stage-erro" },
+  { id: "conferido", label: "Conferido", icon: "stage-conferido" },
+  { id: "anexo", label: "Anexo", icon: "stage-anexo" }
+];
+const STAGE_TOOL_KEYS = { v: "select", r: "rect", o: "ellipse", d: "diamond", l: "line", a: "arrow", c: "connector", t: "text", n: "note", p: "ponto", m: "critico" };
+// O dado guarda a ancora canonica; apelidos entram pela porta da leitura.
+const STAGE_ANCHOR_ALIASES = { right: "e", left: "w", top: "n", bottom: "s", center: "auto", middle: "auto", centre: "auto" };
+let stageUidSeq = 0;
+function stageNum(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+function stageRound(value) {
+  return Math.round(value * 100) / 100;
+}
+function stageClamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+function stageEscape(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (ch) => ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;");
+}
+function stageUid(prefix) {
+  stageUidSeq += 1;
+  return `${prefix}${stageUidSeq.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+// O nome do token fica no arquivo; o valor so existe no markup desenhado.
+function stagePaint() {
+  const computed = getComputedStyle(document.documentElement);
+  const cache = /* @__PURE__ */ Object.create(null);
+  const color = (token) => {
+    if (token === "none") return "none";
+    if (cache[token] !== void 0) return cache[token];
+    const value = computed.getPropertyValue(STAGE_TOKEN_VARS[token] ?? "--color-text").trim();
+    cache[token] = value || computed.getPropertyValue("--color-text").trim() || "currentColor";
+    return cache[token];
+  };
+  return { color };
+}
+function stageBox(x, y, width, height) {
+  return { x: stageNum(x, 0), y: stageNum(y, 0), width: Math.max(0, stageNum(width, 0)), height: Math.max(0, stageNum(height, 0)) };
+}
+function stageUnionBox(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const right = Math.max(a.x + a.width, b.x + b.width);
+  const bottom = Math.max(a.y + a.height, b.y + b.height);
+  return { x, y, width: right - x, height: bottom - y };
+}
+function stageIntersects(a, b) {
+  return !(a.x + a.width < b.x || b.x + b.width < a.x || a.y + a.height < b.y || b.y + b.height < a.y);
+}
+function stageBoxCenter(box) {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+// Caixa de um item no espaco do conteudo do mapa.
+function stageItemRect(item, list) {
+  if (!item) return stageBox(0, 0, 0, 0);
+  if (item.type === "marker") {
+    const size = Math.max(4, stageNum(item.size, 20));
+    return stageBox(item.x, item.y, size, size);
+  }
+  if (item.type === "connector") {
+    const ends = stageConnectorEnds(item, list);
+    if (!ends) return stageBox(0, 0, 0, 0);
+    let box = null;
+    for (const point of stageRoutePath(item, ends.from, ends.to).points) {
+      box = stageUnionBox(box, { x: point.x, y: point.y, width: 0, height: 0 });
+    }
+    return box ?? stageBox(0, 0, 0, 0);
+  }
+  if (item.type === "group") {
+    let box = null;
+    for (const id of item.children ?? []) {
+      const child = list.find((entry) => entry.id === id);
+      if (child) box = stageUnionBox(box, stageItemRect(child, list));
+    }
+    return box ?? stageBox(0, 0, 0, 0);
+  }
+  return stageBox(item.x, item.y, stageNum(item.w, 160), stageNum(item.h, 60));
+}
+function stageRotationOf(item) {
+  return stageNum(item?.rotation, 0);
+}
+function stageRotatePoint(point, center, rotation) {
+  if (!rotation) return point;
+  const angle = rotation * Math.PI / 180;
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  return { x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle), y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle) };
+}
+function stageNormalizeAnchor(anchor) {
+  const key = STAGE_ANCHOR_ALIASES[anchor] ?? anchor;
+  return !key || key === "auto" ? "auto" : key;
+}
+function stageAnchorPoint(box, anchor, rotation) {
+  const center = stageBoxCenter(box);
+  const points = {
+    n: { x: center.x, y: box.y },
+    s: { x: center.x, y: box.y + box.height },
+    w: { x: box.x, y: center.y },
+    e: { x: box.x + box.width, y: center.y },
+    nw: { x: box.x, y: box.y },
+    ne: { x: box.x + box.width, y: box.y },
+    se: { x: box.x + box.width, y: box.y + box.height },
+    sw: { x: box.x, y: box.y + box.height }
+  };
+  return stageRotatePoint(points[stageNormalizeAnchor(anchor)] ?? points.e, center, rotation);
+}
+function stageAutoAnchor(box, reference) {
+  if (!reference) return "e";
+  const center = stageBoxCenter(box);
+  const dx = reference.x - center.x;
+  const dy = reference.y - center.y;
+  const nx = box.width > 0 ? Math.abs(dx) / (box.width / 2) : 0;
+  const ny = box.height > 0 ? Math.abs(dy) / (box.height / 2) : 0;
+  if (nx >= ny) return dx >= 0 ? "e" : "w";
+  return dy >= 0 ? "s" : "n";
+}
+function stageReferencePoint(end, list) {
+  if (!end || typeof end !== "object") return null;
+  if (Array.isArray(end.point)) return { x: stageNum(end.point[0], 0), y: stageNum(end.point[1], 0) };
+  const target = end.item ? list.find((entry) => entry.id === end.item) : null;
+  if (!target) return null;
+  return stageBoxCenter(stageItemRect(target, list));
+}
+function stageEndpointPoint(end, list, other) {
+  if (!end || typeof end !== "object") return null;
+  if (Array.isArray(end.point)) return { x: stageNum(end.point[0], 0), y: stageNum(end.point[1], 0) };
+  // { node } fica para a fatia do organograma: aqui so item e ponto livre.
+  if (!end.item) return null;
+  const target = list.find((entry) => entry.id === end.item);
+  if (!target || target.type === "connector") return null;
+  const box = stageItemRect(target, list);
+  const requested = stageNormalizeAnchor(end.anchor);
+  const anchor = requested === "auto" ? stageAutoAnchor(box, stageReferencePoint(other, list)) : requested;
+  return stageAnchorPoint(box, anchor, stageRotationOf(target));
+}
+function stageConnectorEnds(item, list) {
+  const from = stageEndpointPoint(item.from, list, item.to);
+  const to = stageEndpointPoint(item.to, list, item.from);
+  if (!from || !to) return null;
+  return { from, to };
+}
+function stagePolyline(points) {
+  return points.map((point, index) => `${index === 0 ? "M" : "L"} ${stageRound(point.x)} ${stageRound(point.y)}`).join(" ");
+}
+function stageCubicPoint(from, c1, c2, to, t) {
+  const k = 1 - t;
+  return {
+    x: k * k * k * from.x + 3 * k * k * t * c1.x + 3 * k * t * t * c2.x + t * t * t * to.x,
+    y: k * k * k * from.y + 3 * k * k * t * c1.y + 3 * k * t * t * c2.y + t * t * t * to.y
+  };
+}
+// Rota do conector: d do path + pontos de amostragem (rotulo e caixa).
+function stageRoutePath(item, from, to) {
+  const route = item.route ?? "straight";
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (route === "elbow") {
+    const points = [];
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      const mx = from.x + dx / 2;
+      points.push(from, { x: mx, y: from.y }, { x: mx, y: to.y }, to);
+    } else {
+      const my = from.y + dy / 2;
+      points.push(from, { x: from.x, y: my }, { x: to.x, y: my }, to);
+    }
+    return { d: stagePolyline(points), points };
+  }
+  if (route === "curve") {
+    const c1 = { x: from.x + dx * 0.5, y: from.y };
+    const c2 = { x: to.x - dx * 0.5, y: to.y };
+    const points = [];
+    for (let index = 0; index <= 12; index += 1) points.push(stageCubicPoint(from, c1, c2, to, index / 12));
+    return { d: `M ${stageRound(from.x)} ${stageRound(from.y)} C ${stageRound(c1.x)} ${stageRound(c1.y)} ${stageRound(c2.x)} ${stageRound(c2.y)} ${stageRound(to.x)} ${stageRound(to.y)}`, points };
+  }
+  if (route === "loopback") {
+    const side = dx >= 0 ? 1 : -1;
+    const x1 = from.x + 22 * side;
+    const x2 = to.x - 22 * side;
+    const mid = (from.y + to.y) / 2 + (Math.abs(dy) < 8 ? 26 : 0);
+    const points = [from, { x: x1, y: from.y }, { x: x1, y: mid }, { x: x2, y: mid }, { x: x2, y: to.y }, to];
+    return { d: stagePolyline(points), points };
+  }
+  return { d: stagePolyline([from, to]), points: [from, to] };
+}
+function stagePointAt(points, at) {
+  if (points.length < 2) return points[0] ?? { x: 0, y: 0 };
+  const target = stageClamp(stageNum(at, 0.5), 0, 1);
+  const lengths = [];
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const length = Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
+    lengths.push(length);
+    total += length;
+  }
+  if (total <= 0) return points[0];
+  let walked = total * target;
+  for (let index = 0; index < lengths.length; index += 1) {
+    if (walked <= lengths[index]) {
+      const ratio = lengths[index] > 0 ? walked / lengths[index] : 0;
+      return {
+        x: points[index].x + (points[index + 1].x - points[index].x) * ratio,
+        y: points[index].y + (points[index + 1].y - points[index].y) * ratio
+      };
+    }
+    walked -= lengths[index];
+  }
+  return points[points.length - 1];
+}
+function stageTextLines(value, maxWidth, size) {
+  const advance = Math.max(4, size * 0.6);
+  const perLine = Math.max(4, Math.floor(maxWidth / advance));
+  const lines = [];
+  for (const raw of String(value ?? "").split("\n")) {
+    let line = "";
+    for (const word of raw.split(/\s+/)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (candidate.length <= perLine) {
+        line = candidate;
+        continue;
+      }
+      if (line) lines.push(line);
+      let rest = word;
+      while (rest.length > perLine) {
+        lines.push(rest.slice(0, perLine));
+        rest = rest.slice(perLine);
+      }
+      line = rest;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+function stageTextMarkup(item, paint, box, settings = {}) {
+  const text = item.text ?? {};
+  const value = String(settings.value ?? text.value ?? "");
+  if (!value.trim()) return "";
+  const size = stageNum(settings.size ?? text.size, 13);
+  const align = settings.align ?? text.align ?? "left";
+  const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start";
+  const padX = stageNum(settings.padX, 8);
+  const lines = stageTextLines(value, Math.max(20, box.width - padX * 2), size);
+  const lineHeight = size * 1.35;
+  const x = align === "center" ? box.x + box.width / 2 : align === "right" ? box.x + box.width - padX : box.x + padX;
+  const startY = settings.valign === "top" ? box.y + lineHeight * 0.75 : box.y + box.height / 2 - (lines.length - 1) * lineHeight / 2;
+  const spans = lines.map((line, index) => `<tspan x="${stageRound(x)}" y="${stageRound(startY + index * lineHeight)}">${stageEscape(line)}</tspan>`).join("");
+  const weight = settings.weight ? ` font-weight="${settings.weight}"` : "";
+  return `<text font-family="${stageEscape(FONT)}" font-size="${stageRound(size)}" fill="${paint.color(settings.color ?? text.color ?? "text")}" text-anchor="${anchor}" dominant-baseline="central"${weight}>${spans}</text>`;
+}
+function stageShapeAttrs(item, paint) {
+  const style = item.style ?? {};
+  const dash = STAGE_DASHES[style.dash ?? "solid"] ?? "";
+  const width = stageRound(stageNum(style.width, 1.5));
+  return `fill="${paint.color(style.fill ?? "none")}" stroke="${paint.color(style.stroke ?? "accent")}" stroke-width="${width}" stroke-linejoin="round"${dash ? ` stroke-dasharray="${dash}"` : ""}`;
+}
+// Contorno de cada forma, recebendo os atributos de pintura prontos.
+function stageShapeMarkup(shape, box, attrs) {
+  const x = box.x;
+  const y = box.y;
+  const w = box.width;
+  const h = box.height;
+  const element = (tag, geometry) => `<${tag} ${geometry} ${attrs}/>`;
+  const point = (fx, fy) => `${stageRound(x + w * fx)} ${stageRound(y + h * fy)}`;
+  switch (shape) {
+    case "ellipse":
+    case "circle":
+    case "connector":
+      return element("ellipse", `cx="${stageRound(x + w / 2)}" cy="${stageRound(y + h / 2)}" rx="${stageRound(w / 2)}" ry="${stageRound(h / 2)}"`);
+    case "round":
+    case "legend":
+      return element("rect", `x="${stageRound(x)}" y="${stageRound(y)}" width="${stageRound(w)}" height="${stageRound(h)}" rx="${stageRound(Math.min(12, Math.min(w, h) / 4))}"`);
+    case "terminal":
+      return element("rect", `x="${stageRound(x)}" y="${stageRound(y)}" width="${stageRound(w)}" height="${stageRound(h)}" rx="${stageRound(h / 2)}"`);
+    case "diamond":
+    case "decision":
+      return element("path", `d="M ${point(0.5, 0)} L ${point(1, 0.5)} L ${point(0.5, 1)} L ${point(0, 0.5)} Z"`);
+    case "parallelogram":
+    case "data":
+      return element("path", `d="M ${point(0.22, 0)} L ${point(1, 0)} L ${point(0.78, 1)} L ${point(0, 1)} Z"`);
+    case "trapezoid":
+      return element("path", `d="M ${point(0.18, 0)} L ${point(0.82, 0)} L ${point(1, 1)} L ${point(0, 1)} Z"`);
+    case "hexagon":
+      return element("path", `d="M ${point(0.24, 0)} L ${point(0.76, 0)} L ${point(1, 0.5)} L ${point(0.76, 1)} L ${point(0.24, 1)} L ${point(0, 0.5)} Z"`);
+    case "triangle":
+      return element("path", `d="M ${point(0.5, 0)} L ${point(1, 1)} L ${point(0, 1)} Z"`);
+    case "arrow-block":
+      return element("path", `d="M ${point(0, 0.28)} L ${point(0.68, 0.28)} L ${point(0.68, 0)} L ${point(1, 0.5)} L ${point(0.68, 1)} L ${point(0.68, 0.72)} L ${point(0, 0.72)} Z"`);
+    case "cloud":
+      return element("path", `d="M ${point(0.26, 0.92)} C ${point(0.05, 0.92)} ${point(0, 0.72)} ${point(0.14, 0.6)} C ${point(0.06, 0.36)} ${point(0.26, 0.18)} ${point(0.4, 0.3)} C ${point(0.5, 0.06)} ${point(0.8, 0.06)} ${point(0.84, 0.32)} C ${point(0.99, 0.42)} ${point(0.96, 0.76)} ${point(0.78, 0.86)} C ${point(0.66, 0.99)} ${point(0.36, 1)} ${point(0.26, 0.92)} Z"`);
+    case "document":
+      return element("path", `d="M ${point(0, 0)} L ${point(1, 0)} L ${point(1, 0.78)} C ${point(0.82, 1.04)} ${point(0.68, 0.6)} ${point(0.5, 0.82)} C ${point(0.32, 1.04)} ${point(0.18, 0.6)} ${point(0, 0.82)} Z"`);
+    case "delay":
+      return element("path", `d="M ${point(0, 0)} L ${point(0.55, 0)} A ${stageRound(w * 0.45)} ${stageRound(h / 2)} 0 0 1 ${point(0.55, 1)} L ${point(0, 1)} Z"`);
+    case "page":
+      return element("path", `d="M ${point(0.16, 0.14)} L ${point(0.84, 0)} L ${point(0.84, 1)} L ${point(0.16, 0.86)} Z"`);
+    case "subprocess":
+      return element("rect", `x="${stageRound(x)}" y="${stageRound(y)}" width="${stageRound(w)}" height="${stageRound(h)}"`) + element("path", `d="M ${point(0.12, 0)} V ${point(0.12, 1)} M ${point(0.88, 0)} V ${point(0.88, 1)}" fill="none"`);
+    case "cylinder":
+    case "database": {
+      const radiusY = Math.min(h * 0.18, 12);
+      const body = element("path", `d="M ${stageRound(x)} ${stageRound(y + radiusY)} V ${stageRound(y + h - radiusY)} A ${stageRound(w / 2)} ${stageRound(radiusY)} 0 0 0 ${stageRound(x + w)} ${stageRound(y + h - radiusY)} V ${stageRound(y + radiusY)} Z"`);
+      const rim = element("ellipse", `cx="${stageRound(x + w / 2)}" cy="${stageRound(y + radiusY)}" rx="${stageRound(w / 2)}" ry="${stageRound(radiusY)}"`);
+      const extra = shape === "database" ? element("path", `d="M ${stageRound(x)} ${stageRound(y + h * 0.5)} A ${stageRound(w / 2)} ${stageRound(radiusY)} 0 0 0 ${stageRound(x + w)} ${stageRound(y + h * 0.5)}" fill="none"`) : "";
+      return body + rim + extra;
+    }
+    case "actor": {
+      const centerX = x + w / 2;
+      const head = Math.min(w, h) * 0.15;
+      const headMarkup = element("circle", `cx="${stageRound(centerX)}" cy="${stageRound(y + head)}" r="${stageRound(head)}"`);
+      const bodyMarkup = element("path", `d="M ${stageRound(centerX)} ${stageRound(y + head * 2)} V ${stageRound(y + h * 0.62)} M ${stageRound(centerX - w * 0.34)} ${stageRound(y + h * 0.36)} H ${stageRound(centerX + w * 0.34)} M ${stageRound(centerX)} ${stageRound(y + h * 0.62)} L ${stageRound(centerX - w * 0.28)} ${stageRound(y + h)} M ${stageRound(centerX)} ${stageRound(y + h * 0.62)} L ${stageRound(centerX + w * 0.28)} ${stageRound(y + h)}" fill="none"`);
+      return headMarkup + bodyMarkup;
+    }
+    default:
+      return element("rect", `x="${stageRound(x)}" y="${stageRound(y)}" width="${stageRound(w)}" height="${stageRound(h)}"`);
+  }
+}
+function stageMarkerMarkup(item, paint, box) {
+  const kind = item.marker ?? "ponto";
+  const color = paint.color(STAGE_MARKER_COLOR[kind] ?? "accent");
+  const surface = paint.color("surface");
+  const size = Math.min(box.width, box.height);
+  const center = stageBoxCenter(box);
+  const round = stageRound;
+  const number = String(item.text?.value ?? "1");
+  if (kind === "ponto") {
+    return `<circle cx="${round(center.x)}" cy="${round(center.y)}" r="${round(size / 2)}" fill="${color}"/>`;
+  }
+  if (kind === "numero") {
+    const font = `<text x="${round(center.x)}" y="${round(center.y)}" font-family="${stageEscape(FONT)}" font-size="${round(size * 0.55)}" fill="${color}" text-anchor="middle" dominant-baseline="central">${stageEscape(number)}</text>`;
+    return `<circle cx="${round(center.x)}" cy="${round(center.y)}" r="${round(size / 2)}" fill="${paint.color("surface")}" stroke="${color}" stroke-width="1.5"/>${font}`;
+  }
+  // Forma + glifo: o estado nunca fica so na cor.
+  const glyphAttrs = `fill="none" stroke="${surface}" stroke-width="${round(size * 0.11)}" stroke-linecap="round" stroke-linejoin="round"`;
+  if (kind === "critico") {
+    const shape = `<path d="M ${round(center.x)} ${round(center.y - size * 0.5)} L ${round(center.x + size * 0.54)} ${round(center.y + size * 0.42)} L ${round(center.x - size * 0.54)} ${round(center.y + size * 0.42)} Z" fill="${color}"/>`;
+    const glyph = `<path ${glyphAttrs} d="M ${round(center.x)} ${round(center.y - size * 0.2)} V ${round(center.y + size * 0.08)}"/><circle cx="${round(center.x)}" cy="${round(center.y + size * 0.26)}" r="${round(size * 0.06)}" fill="${surface}"/>`;
+    return shape + glyph;
+  }
+  if (kind === "erro") {
+    const shape = `<circle cx="${round(center.x)}" cy="${round(center.y)}" r="${round(size / 2)}" fill="${color}"/>`;
+    const glyph = `<path ${glyphAttrs} d="M ${round(center.x - size * 0.18)} ${round(center.y - size * 0.18)} L ${round(center.x + size * 0.18)} ${round(center.y + size * 0.18)} M ${round(center.x + size * 0.18)} ${round(center.y - size * 0.18)} L ${round(center.x - size * 0.18)} ${round(center.y + size * 0.18)}"/>`;
+    return shape + glyph;
+  }
+  if (kind === "conferido") {
+    const shape = `<circle cx="${round(center.x)}" cy="${round(center.y)}" r="${round(size / 2)}" fill="${color}"/>`;
+    const glyph = `<path ${glyphAttrs} d="M ${round(center.x - size * 0.22)} ${round(center.y + size * 0.02)} L ${round(center.x - size * 0.06)} ${round(center.y + size * 0.19)} L ${round(center.x + size * 0.24)} ${round(center.y - size * 0.18)}"/>`;
+    return shape + glyph;
+  }
+  const side = size * 0.72;
+  const shape = `<rect x="${round(center.x - side / 2)}" y="${round(center.y - side / 2)}" width="${round(side)}" height="${round(side)}" rx="${round(size * 0.16)}" fill="${color}"/>`;
+  const glyph = `<path ${glyphAttrs} d="M ${round(center.x - size * 0.16)} ${round(center.y - size * 0.2)} V ${round(center.y + size * 0.06)} A ${round(size * 0.14)} ${round(size * 0.14)} 0 0 0 ${round(center.x + size * 0.12)} ${round(center.y + size * 0.06)} V ${round(center.y - size * 0.14)}"/>`;
+  return shape + glyph;
+}
+function stageNoteMarkup(item, paint, box) {
+  const fold = Math.min(16, box.width / 4, box.height / 4);
+  const stroke = paint.color("border");
+  const attrs = `fill="${paint.color("surface-alt")}" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"`;
+  const body = `<path ${attrs} d="M ${stageRound(box.x)} ${stageRound(box.y)} H ${stageRound(box.x + box.width - fold)} L ${stageRound(box.x + box.width)} ${stageRound(box.y + fold)} V ${stageRound(box.y + box.height)} H ${stageRound(box.x)} Z"/>`;
+  const corner = `<path fill="none" stroke="${stroke}" stroke-width="1.5" d="M ${stageRound(box.x + box.width - fold)} ${stageRound(box.y)} V ${stageRound(box.y + fold)} H ${stageRound(box.x + box.width)}"/>`;
+  const text = stageTextMarkup(item, paint, { x: box.x + 7, y: box.y + 5, width: box.width - 14, height: box.height - 10 }, { align: "left", valign: "top", size: stageNum(item.text?.size, 12) });
+  return body + corner + text;
+}
+function stageItemMarkup(item, list, paint) {
+  const box = stageItemRect(item, list);
+  const rotation = stageRotationOf(item);
+  const center = stageBoxCenter(box);
+  const transform = rotation ? ` transform="rotate(${stageRound(rotation)} ${stageRound(center.x)} ${stageRound(center.y)})"` : "";
+  const head = `class="stage-item" data-id="${stageEscape(item.id)}" data-type="${stageEscape(item.type)}"${transform}`;
+  if (item.type === "marker") {
+    return `<g ${head}>${stageMarkerMarkup(item, paint, box)}</g>`;
+  }
+  if (item.type === "note") {
+    return `<g ${head}>${stageNoteMarkup(item, paint, box)}</g>`;
+  }
+  if (item.type === "text") {
+    const hit = `<rect x="${stageRound(box.x)}" y="${stageRound(box.y)}" width="${stageRound(box.width)}" height="${stageRound(box.height)}" fill="transparent" stroke="none"/>`;
+    return `<g ${head}>${hit}${stageTextMarkup(item, paint, box, { align: item.text?.align ?? "left" })}</g>`;
+  }
+  if (item.type === "shape") {
+    const shape = stageShapeMarkup(item.shape ?? "rect", box, stageShapeAttrs(item, paint));
+    const text = stageTextMarkup(item, paint, box, { align: item.text?.align ?? "center", size: stageNum(item.text?.size, 13) });
+    return `<g ${head}>${shape}${text}</g>`;
+  }
+  return "";
+}
+function stageMarkerRef(registry, kind, token, side, paint, prefix) {
+  const key = `${kind}-${token}-${side}`;
+  if (registry.has(key)) return `${prefix}-${key}`;
+  const color = paint.color(token);
+  const glyph = kind === "dot"
+    ? `<circle cx="5" cy="5" r="3.4" fill="${color}"/>`
+    : side === "start"
+      ? `<path d="M 9.4 0.6 L 0 5 L 9.4 9.4 Z" fill="${color}"/>`
+      : `<path d="M 0.6 0.6 L 10 5 L 0.6 9.4 Z" fill="${color}"/>`;
+  const refX = side === "start" ? 2.4 : 7.6;
+  registry.set(key, `<marker id="${prefix}-${key}" viewBox="0 0 10 10" refX="${refX}" refY="5" markerWidth="6" markerHeight="6" markerUnits="strokeWidth" orient="auto">${glyph}</marker>`);
+  return `${prefix}-${key}`;
+}
+function stageConnectorMarkup(item, list, paint, registry, prefix) {
+  const ends = stageConnectorEnds(item, list);
+  if (!ends) return "";
+  const route = stageRoutePath(item, ends.from, ends.to);
+  const token = item.stroke ?? "accent";
+  const width = stageRound(stageNum(item.width, 1.5));
+  const dash = STAGE_DASHES[item.dash ?? "solid"] ?? "";
+  const attrs = `fill="none" stroke="${paint.color(token)}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"${dash ? ` stroke-dasharray="${dash}"` : ""}`;
+  const arrowStart = item.arrowStart && item.arrowStart !== "none" ? ` marker-start="url(#${stageMarkerRef(registry, item.arrowStart, token, "start", paint, prefix)})"` : "";
+  const arrowEnd = item.arrowEnd && item.arrowEnd !== "none" ? ` marker-end="url(#${stageMarkerRef(registry, item.arrowEnd, token, "end", paint, prefix)})"` : "";
+  const hit = `<path d="${route.d}" fill="none" stroke="transparent" stroke-width="${stageRound(width + 11)}"/>`;
+  const line = `<path d="${route.d}" ${attrs}${arrowStart}${arrowEnd}/>`;
+  let label = "";
+  if (String(item.label ?? "").trim()) {
+    const at = stagePointAt(route.points, item.labelAt);
+    label = `<text x="${stageRound(at.x)}" y="${stageRound(at.y - 8)}" font-family="${stageEscape(FONT)}" font-size="12" fill="${paint.color("text")}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="${paint.color("surface")}" stroke-width="3.5" stroke-linejoin="round">${stageEscape(item.label)}</text>`;
+  }
+  return `<g class="stage-item" data-id="${stageEscape(item.id)}" data-type="connector">${hit}${line}${label}</g>`;
+}
+// Unico desenho da camada: usado pela camada ao vivo e pelo export.
+function renderAnnotationsSvg(items, options = {}) {
+  const list = (Array.isArray(items) ? items : []).filter((item) => item && typeof item === "object" && item.id);
+  const paint = options.paint ?? stagePaint();
+  const prefix = options.idPrefix ?? "stage";
+  const registry = /* @__PURE__ */ new Map();
+  const body = [];
+  for (const item of list) {
+    if (item.type === "group") continue;
+    const markup = item.type === "connector" ? stageConnectorMarkup(item, list, paint, registry, prefix) : stageItemMarkup(item, list, paint);
+    if (markup) body.push(markup);
+  }
+  const defs = registry.size > 0 ? `<defs>${[...registry.values()].join("")}</defs>` : "";
+  return defs + body.join("");
+}
+function stageSvgEl(tag, attributes) {
+  const element = document.createElementNS(STAGE_NS, tag);
+  for (const [key, value] of Object.entries(attributes)) {
+    if (value !== null && value !== void 0) element.setAttribute(key, String(value));
+  }
+  return element;
+}
+// O bundle tem as suas proprias class Element/Event (svg.js) no topo do modulo, que
+// sombreiam as globais: aqui elemento se checa por capacidade, nunca por instanceof.
+function stageElement(node) {
+  return node && typeof node.closest === "function" ? node : null;
+}
+function stageMeasure(node) {
+  if (!node || typeof node.getBBox !== "function") return null;
+  try {
+    const box = node.getBBox();
+    if (box.width > 0 || box.height > 0) return { x: box.x, y: box.y, width: box.width, height: box.height };
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+function stageNodeBoxes(mindMap) {
+  const root = mindMap?.renderer?.root;
+  const boxes = [];
+  const walk = (node) => {
+    if (!node) return;
+    const width = stageNum(node.width, 0);
+    const height = stageNum(node.height, 0);
+    if (width > 0 || height > 0) boxes.push({ x: stageNum(node.left, 0), y: stageNum(node.top, 0), width, height });
+    (node.children ?? []).forEach(walk);
+  };
+  walk(root);
+  return boxes;
+}
+function stageNodesBox(mindMap) {
+  return stageNodeBoxes(mindMap).reduce((acc, box) => stageUnionBox(acc, box), null);
+}
+function stageItemsBox(list) {
+  let box = null;
+  for (const item of list) {
+    if (item.type === "connector") {
+      const ends = stageConnectorEnds(item, list);
+      if (!ends) continue;
+      for (const point of stageRoutePath(item, ends.from, ends.to).points) {
+        box = stageUnionBox(box, { x: point.x, y: point.y, width: 0, height: 0 });
+      }
+      continue;
+    }
+    if (item.type === "group") continue;
+    box = stageUnionBox(box, stageItemRect(item, list));
+  }
+  return box;
+}
+const STAGE_SQUARE_SHAPES = { circle: 1, connector: 1 };
+const STAGE_DEFAULT_BOX = { shape: { width: 160, height: 90 }, text: { width: 220, height: 40 }, note: { width: 200, height: 120 } };
+function stageToolTitle(entry2) {
+  return entry2.key ? `${entry2.label} (${entry2.key})` : entry2.label;
+}
+function stagePrefixFor(item) {
+  if (item.type === "connector") return "l";
+  if (item.type === "marker") return "m";
+  if (item.type === "group") return "g";
+  if (item.type === "note") return "n";
+  if (item.type === "text") return "t";
+  return "a";
+}
+function createStage(options) {
+  const area = options.area;
+  const getMindMap = options.getMindMap;
+  const onChange = options.onChange;
+  const history = createHistory(STAGE_UNDO_LIMIT);
+  let items = [];
+  let selection = /* @__PURE__ */ new Set();
+  let tool = { kind: "select" };
+  let enabled = false;
+  let ownUndo = false;
+  let pending = null;
+  let gesture = null;
+  let marquee = null;
+  let guides = [];
+  let lastClick = { id: null, at: 0 };
+  let editBox = null;
+  let editTarget = null;
+  const findItem = (id) => items.find((entry) => entry.id === id);
+  const cloneValue = (value) => JSON.parse(JSON.stringify(value));
+  // O passo de undo leva itens e selecao: desfazer nao pode largar a posse do teclado.
+  const snapshot = () => JSON.stringify({ items, selection: [...selection] });
+  function transformOf(mindMap) {
+    const transform = mindMap?.view?.getTransformData?.()?.transform ?? {};
+    return {
+      scaleX: stageNum(transform.scaleX, 1) || 1,
+      scaleY: stageNum(transform.scaleY, 1) || 1,
+      translateX: stageNum(transform.translateX, 0),
+      translateY: stageNum(transform.translateY, 0)
+    };
+  }
+  function canvasRect() {
+    const node = getMindMap()?.svg?.node;
+    return node ? node.getBoundingClientRect() : area.getBoundingClientRect();
+  }
+  function contentPoint(event) {
+    const rect = canvasRect();
+    const transform = transformOf(getMindMap());
+    return { x: (event.clientX - rect.left - transform.translateX) / transform.scaleX, y: (event.clientY - rect.top - transform.translateY) / transform.scaleY };
+  }
+  function screenRect(box) {
+    const rect = canvasRect();
+    const transform = transformOf(getMindMap());
+    return {
+      left: rect.left + transform.translateX + box.x * transform.scaleX,
+      top: rect.top + transform.translateY + box.y * transform.scaleY,
+      width: box.width * transform.scaleX,
+      height: box.height * transform.scaleY,
+      scale: transform.scaleX
+    };
+  }
+  // ------------------------------------------------------------- camada e chrome
+  const layer = document.createElementNS(STAGE_NS, "svg");
+  layer.setAttribute("id", "stage-layer");
+  layer.setAttribute("class", "stage-layer");
+  const view = document.createElementNS(STAGE_NS, "g");
+  view.setAttribute("class", "stage-view");
+  const content = document.createElementNS(STAGE_NS, "g");
+  content.setAttribute("class", "stage-content");
+  const overlay = document.createElementNS(STAGE_NS, "g");
+  overlay.setAttribute("class", "stage-overlay");
+  view.append(content, overlay);
+  layer.append(view);
+  layer.style.display = "none";
+  area.append(layer);
+  function syncView() {
+    const transform = transformOf(getMindMap());
+    view.setAttribute("transform", `translate(${stageRound(transform.translateX)} ${stageRound(transform.translateY)}) scale(${stageRound(transform.scaleX)} ${stageRound(transform.scaleY)})`);
+  }
+  // ------------------------------------------------------------------ selecao
+  function expandIds(ids) {
+    const out = /* @__PURE__ */ new Set();
+    const visit = (id) => {
+      if (out.has(id)) return;
+      const item = findItem(id);
+      if (!item) return;
+      out.add(id);
+      if (item.type === "group") (item.children ?? []).forEach(visit);
+    };
+    ids.forEach(visit);
+    return [...out];
+  }
+  const selectionItems = () => [...selection].map(findItem).filter(Boolean);
+  const selectionLeaves = () => expandIds([...selection]).map(findItem).filter((item) => item && item.type !== "group");
+  function groupOwnerOf(id) {
+    let owner = null;
+    for (const item of items) {
+      if (item.type === "group" && (item.children ?? []).includes(id)) owner = item;
+    }
+    return owner;
+  }
+  function normalizeSelection() {
+    const next = /* @__PURE__ */ new Set();
+    for (const id of selection) {
+      if (!findItem(id)) continue;
+      const owner = groupOwnerOf(id);
+      next.add(owner ? owner.id : id);
+    }
+    selection = next;
+  }
+  function setSelection(ids) {
+    selection = new Set(ids);
+    normalizeSelection();
+    sync();
+  }
+  // ------------------------------------------------------------------- undo
+  function begin() {
+    if (pending === null) pending = snapshot();
+  }
+  function commit() {
+    const previous = pending;
+    pending = null;
+    if (previous === null || previous === snapshot()) return;
+    history.push(previous);
+    ownUndo = true;
+    onChange();
+  }
+  function restore(snapshotText) {
+    const data = JSON.parse(snapshotText);
+    items = data.items;
+    selection = new Set(data.selection ?? []);
+    ownUndo = true;
+    onChange();
+    sync();
+  }
+  function undo() {
+    const previous = history.undo(snapshot());
+    if (previous === null) return false;
+    restore(previous);
+    return true;
+  }
+  function redo() {
+    const next = history.redo(snapshot());
+    if (next === null) return false;
+    restore(next);
+    return true;
+  }
+  // ------------------------------------------------------------------ desenho
+  function renderItems() {
+    content.innerHTML = renderAnnotationsSvg(items, { idPrefix: "stage", paint: stagePaint() });
+    const marked = new Set(selectionLeaves().map((item) => item.id));
+    for (const node of content.querySelectorAll(".stage-item")) {
+      node.classList.toggle("is-selected", marked.has(node.dataset.id));
+    }
+    syncView();
+  }
+  function handlePoint(box, handle) {
+    const center = stageBoxCenter(box);
+    const points = {
+      nw: { x: box.x, y: box.y },
+      n: { x: center.x, y: box.y },
+      ne: { x: box.x + box.width, y: box.y },
+      e: { x: box.x + box.width, y: center.y },
+      se: { x: box.x + box.width, y: box.y + box.height },
+      s: { x: center.x, y: box.y + box.height },
+      sw: { x: box.x, y: box.y + box.height },
+      w: { x: box.x, y: center.y }
+    };
+    return points[handle] ?? points.se;
+  }
+  function oppositeHandle(handle) {
+    return { nw: "se", n: "s", ne: "sw", e: "w", se: "nw", s: "n", sw: "ne", w: "e" }[handle] ?? "nw";
+  }
+  function renderOverlay() {
+    overlay.replaceChildren();
+    const leaves = selectionLeaves();
+    const boxes = [];
+    for (const item of leaves) {
+      if (item.type === "connector") {
+        const ends = stageConnectorEnds(item, items);
+        if (ends) overlay.append(stageSvgEl("path", { class: "stage-outline", d: stageRoutePath(item, ends.from, ends.to).d }));
+        continue;
+      }
+      const box = stageItemRect(item, items);
+      boxes.push(box);
+      const rotation = stageRotationOf(item);
+      const center = stageBoxCenter(box);
+      const outline = stageSvgEl("rect", { class: "stage-outline", x: stageRound(box.x), y: stageRound(box.y), width: stageRound(box.width), height: stageRound(box.height) });
+      if (rotation) outline.setAttribute("transform", `rotate(${stageRound(rotation)} ${stageRound(center.x)} ${stageRound(center.y)})`);
+      overlay.append(outline);
+    }
+    const single = leaves.length === 1 ? leaves[0] : null;
+    const frame = single && single.type !== "connector"
+      ? { box: stageItemRect(single, items), rotation: stageRotationOf(single), id: single.id }
+      : boxes.length > 1
+        ? { box: boxes.reduce((acc, box) => stageUnionBox(acc, box), null), rotation: 0, id: null }
+        : null;
+    if (frame && frame.box) {
+      const center = stageBoxCenter(frame.box);
+      for (const handle of STAGE_HANDLES) {
+        const point = stageRotatePoint(handlePoint(frame.box, handle), center, frame.rotation);
+        overlay.append(stageSvgEl("rect", {
+          class: "stage-handle",
+          "data-handle": handle,
+          "data-item": frame.id ?? "",
+          x: stageRound(point.x - 3.5),
+          y: stageRound(point.y - 3.5),
+          width: 7,
+          height: 7
+        }));
+      }
+      if (frame.id) {
+        const top = stageRotatePoint({ x: center.x, y: frame.box.y }, center, frame.rotation);
+        const up = Math.hypot(top.x - center.x, top.y - center.y) || 1;
+        const rotationPoint = { x: top.x + (top.x - center.x) / up * STAGE_ROT_OFFSET, y: top.y + (top.y - center.y) / up * STAGE_ROT_OFFSET };
+        overlay.append(stageSvgEl("circle", { class: "stage-handle", "data-handle": "rot", "data-item": frame.id, cx: stageRound(rotationPoint.x), cy: stageRound(rotationPoint.y), r: 4.5 }));
+        for (const anchor of STAGE_LINK_ANCHORS) {
+          const base = stageAnchorPoint(frame.box, anchor, 0);
+          const dx = base.x - center.x;
+          const dy = base.y - center.y;
+          const length2 = Math.hypot(dx, dy) || 1;
+          const point = stageRotatePoint({ x: base.x + dx / length2 * STAGE_LINK_OFFSET, y: base.y + dy / length2 * STAGE_LINK_OFFSET }, center, frame.rotation);
+          overlay.append(stageSvgEl("circle", { class: "stage-handle", "data-handle": "link", "data-anchor": anchor, "data-item": frame.id, cx: stageRound(point.x), cy: stageRound(point.y), r: 4 }));
+        }
+      }
+    }
+    if (marquee?.box) {
+      overlay.append(stageSvgEl("rect", { class: "stage-marquee", x: stageRound(marquee.box.x), y: stageRound(marquee.box.y), width: stageRound(marquee.box.width), height: stageRound(marquee.box.height) }));
+    }
+    for (const guide of guides) {
+      overlay.append(stageSvgEl("line", { class: "stage-guide", x1: stageRound(guide.x1), y1: stageRound(guide.y1), x2: stageRound(guide.x2), y2: stageRound(guide.y2) }));
+    }
+  }
+  function sync() {
+    normalizeSelection();
+    renderItems();
+    renderOverlay();
+    syncProps();
+  }
+  // -------------------------------------------------------- paleta de ferramentas
+  const palette = el("div", "stage-tools");
+  palette.id = "stage-tools";
+  palette.setAttribute("role", "toolbar");
+  palette.setAttribute("aria-label", "Ferramentas do palco");
+  palette.hidden = true;
+  const toolButtons = [];
+  const groupButtons = [];
+  function toolMatches(descriptor, active) {
+    return descriptor.kind === active.kind && (descriptor.shape ?? null) === (active.shape ?? null) && (descriptor.line ?? null) === (active.line ?? null) && (descriptor.marker ?? null) === (active.marker ?? null);
+  }
+  function paletteButton(className, descriptor, title, icon) {
+    const button2 = el("button", className);
+    button2.type = "button";
+    button2.dataset.tool = descriptor.kind;
+    if (descriptor.shape) button2.dataset.shape = descriptor.shape;
+    if (descriptor.line) button2.dataset.line = descriptor.line;
+    if (descriptor.marker) button2.dataset.marker = descriptor.marker;
+    button2.title = title;
+    button2.setAttribute("aria-label", title);
+    button2.setAttribute("aria-pressed", "false");
+    button2.innerHTML = iconSvg(icon);
+    const entry = { button: button2, descriptor, icon, matches: (active) => toolMatches(descriptor, active) };
+    toolButtons.push(entry);
+    button2.addEventListener("click", () => {
+      setTool(descriptor);
+      button2.blur();
+    });
+    return entry;
+  }
+  function buildGroup(id, label, icon, builder) {
+    const wrapper = el("div", "stage-group");
+    const button2 = el("button", "stage-tool");
+    button2.type = "button";
+    button2.dataset.group = id;
+    button2.setAttribute("aria-haspopup", "true");
+    button2.setAttribute("aria-expanded", "false");
+    button2.title = label;
+    button2.setAttribute("aria-label", label);
+    button2.innerHTML = iconSvg(icon);
+    const flyout = el("div", "stage-flyout");
+    flyout.hidden = true;
+    flyout.setAttribute("role", "menu");
+    flyout.append(el("div", "stage-flyout-title", label));
+    const group = { id, button: button2, flyout, icon, items: [] };
+    builder(flyout, group);
+    wrapper.append(button2, flyout);
+    groupButtons.push(group);
+    button2.addEventListener("click", () => {
+      const willOpen = flyout.hidden;
+      closeFlyouts(group);
+      flyout.hidden = !willOpen;
+      button2.setAttribute("aria-expanded", String(willOpen));
+    });
+    return wrapper;
+  }
+  function closeFlyouts(except) {
+    for (const group of groupButtons) {
+      if (group === except) continue;
+      group.flyout.hidden = true;
+      group.button.setAttribute("aria-expanded", "false");
+    }
+  }
+  function groupItem(flyout, group, descriptor, title, icon) {
+    const entry = paletteButton("stage-item", descriptor, title, icon);
+    entry.button.setAttribute("role", "menuitem");
+    entry.group = group;
+    group.items.push(entry);
+    flyout.append(entry.button);
+    return entry;
+  }
+  const selectEntry = paletteButton("stage-tool", { kind: "select" }, "Selecionar (V)", "stage-select");
+  palette.append(selectEntry.button, el("span", "stage-sep"));
+  palette.append(buildGroup("geo", "Formas geométricas", "stage-rect", (flyout, group) => {
+    for (const shape of STAGE_GEO_SHAPES) groupItem(flyout, group, { kind: "shape", shape: shape.id }, stageToolTitle(shape), shape.icon);
+  }));
+  palette.append(buildGroup("flow", "Símbolos de fluxo", "stage-flow", (flyout, group) => {
+    for (const shape of STAGE_FLOW_SHAPES) groupItem(flyout, group, { kind: "shape", shape: shape.id }, stageToolTitle(shape), shape.icon);
+  }));
+  palette.append(buildGroup("line", "Linhas e conectores", "stage-arrow", (flyout, group) => {
+    groupItem(flyout, group, { kind: "link" }, "Conector entre formas (C)", "stage-link");
+    for (const line of STAGE_LINES) groupItem(flyout, group, { kind: "line", line: line.id }, stageToolTitle(line), line.icon);
+  }));
+  palette.append(buildGroup("marker", "Marcadores", "stage-marker", (flyout, group) => {
+    for (const marker of STAGE_MARKERS) groupItem(flyout, group, { kind: "marker", marker: marker.id }, stageToolTitle(marker), marker.icon);
+  }));
+  palette.append(buildGroup("note", "Anotações", "note", (flyout, group) => {
+    groupItem(flyout, group, { kind: "text" }, "Texto (T)", "stage-text");
+    groupItem(flyout, group, { kind: "note" }, "Nota (N)", "note");
+    for (const shape of STAGE_ANNOTATION_SHAPES) groupItem(flyout, group, { kind: "shape", shape: shape.id }, stageToolTitle(shape), shape.icon);
+  }));
+  palette.append(el("span", "stage-sep"));
+  const actions = [
+    { action: "group", title: "Agrupar (Ctrl+G)", icon: "stage-group" },
+    { action: "duplicate", title: "Duplicar (Ctrl+D)", icon: "copy" },
+    { action: "front", title: "Trazer para a frente (Ctrl+])", icon: "stage-front" },
+    { action: "back", title: "Enviar para trás (Ctrl+[)", icon: "stage-back" },
+    { action: "undo", title: "Desfazer (Ctrl+Z)", icon: "undo" },
+    { action: "redo", title: "Refazer (Ctrl+Y)", icon: "redo" },
+    { action: "delete", title: "Excluir (Del)", icon: "trash" }
+  ];
+  for (const entry of actions) {
+    const button2 = el("button", "stage-tool");
+    button2.type = "button";
+    button2.dataset.action = entry.action;
+    button2.title = entry.title;
+    button2.setAttribute("aria-label", entry.title);
+    button2.innerHTML = iconSvg(entry.icon);
+    button2.addEventListener("click", () => {
+      runAction(entry.action);
+      button2.blur();
+    });
+    palette.append(button2);
+  }
+  area.append(palette);
+  palette.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || event.target.closest("button")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const paletteRect = palette.getBoundingClientRect();
+    const areaRect = area.getBoundingClientRect();
+    const offset = { x: event.clientX - paletteRect.left, y: event.clientY - paletteRect.top };
+    palette.classList.add("is-dragging");
+    const move = (moveEvent) => {
+      const left = stageClamp(moveEvent.clientX - areaRect.left - offset.x, 0, Math.max(0, areaRect.width - palette.offsetWidth));
+      const top = stageClamp(moveEvent.clientY - areaRect.top - offset.y, 0, Math.max(0, areaRect.height - palette.offsetHeight));
+      palette.style.left = `${Math.round(left)}px`;
+      palette.style.top = `${Math.round(top)}px`;
+      palette.style.bottom = "auto";
+      palette.style.transform = "none";
+    };
+    const stop = () => {
+      palette.classList.remove("is-dragging");
+      window.removeEventListener("mousemove", move, true);
+      window.removeEventListener("mouseup", stop, true);
+    };
+    window.addEventListener("mousemove", move, true);
+    window.addEventListener("mouseup", stop, true);
+  });
+  // ------------------------------------------------------ propriedades do item
+  const props = el("div", "stage-props");
+  props.id = "stage-props";
+  props.hidden = true;
+  function propsRow(label) {
+    const row = el("div", "stage-prop");
+    row.append(el("span", "stage-prop-label", label));
+    const holder = el("span", "stage-swatches");
+    row.append(holder);
+    props.append(row);
+    return { row, holder, buttons: [] };
+  }
+  function swatchRow(label, read, apply) {
+    const entry = propsRow(label);
+    for (const token of STAGE_SWATCH_TOKENS) {
+      const name = STAGE_TOKEN_LABELS[token] ?? token;
+      const button2 = el("button", "stage-swatch");
+      button2.type = "button";
+      button2.dataset.token = token;
+      button2.title = name;
+      button2.setAttribute("aria-label", name);
+      button2.setAttribute("aria-pressed", "false");
+      button2.addEventListener("click", () => apply(token));
+      entry.holder.append(button2);
+      entry.buttons.push({ button: button2, value: token });
+    }
+    entry.read = read;
+    return entry;
+  }
+  function valueRow(label, options, read, apply) {
+    const entry = propsRow(label);
+    for (const option of options) {
+      const button2 = el("button", void 0, option.label);
+      button2.type = "button";
+      button2.title = option.title ?? option.label;
+      button2.setAttribute("aria-pressed", "false");
+      button2.addEventListener("click", () => apply(option.value));
+      entry.holder.append(button2);
+      entry.buttons.push({ button: button2, value: option.value });
+    }
+    entry.read = read;
+    return entry;
+  }
+  const selectedShapes = () => selectionLeaves().filter((item) => item.type === "shape");
+  const selectedLines = () => selectionLeaves().filter((item) => item.type === "connector");
+  function commonOf(list, read) {
+    if (!list.length) return null;
+    const first = read(list[0]);
+    return list.every((item) => read(item) === first) ? first : null;
+  }
+  function mutate(mutator) {
+    begin();
+    mutator();
+    commit();
+    sync();
+  }
+  function applyStyle(patch) {
+    const targets = selectedShapes();
+    if (!targets.length) return;
+    mutate(() => {
+      for (const item of targets) item.style = { stroke: "accent", fill: "none", dash: "solid", width: 1.5, ...item.style ?? {}, ...patch };
+    });
+  }
+  function applyWidth(value) {
+    const shapes = selectedShapes();
+    const lines = selectedLines();
+    if (!shapes.length && !lines.length) return;
+    mutate(() => {
+      for (const item of shapes) item.style = { ...item.style ?? {}, width: value };
+      for (const item of lines) item.width = value;
+    });
+  }
+  function applyDash(value) {
+    const shapes = selectedShapes();
+    const lines = selectedLines();
+    if (!shapes.length && !lines.length) return;
+    mutate(() => {
+      for (const item of shapes) item.style = { ...item.style ?? {}, dash: value };
+      for (const item of lines) item.dash = value;
+    });
+  }
+  function applyArrow(key, value) {
+    const lines = selectedLines();
+    if (!lines.length) return;
+    mutate(() => {
+      for (const item of lines) item[key] = value;
+    });
+  }
+  const propRows = {
+    stroke: swatchRow("Traço", () => commonOf(selectedShapes(), (item) => item.style?.stroke ?? "accent"), (token) => applyStyle({ stroke: token })),
+    fill: swatchRow("Preenchimento", () => commonOf(selectedShapes(), (item) => item.style?.fill ?? "none"), (token) => applyStyle({ fill: token })),
+    width: valueRow("Espessura", STAGE_WIDTHS.map((value) => ({ value, label: String(value).replace(".", ",") })), () => {
+      const shapes = selectedShapes();
+      const lines = selectedLines();
+      if (shapes.length && lines.length) return null;
+      return shapes.length ? commonOf(shapes, (item) => stageNum(item.style?.width, 1.5)) : commonOf(lines, (item) => stageNum(item.width, 1.5));
+    }, applyWidth),
+    dash: valueRow("Estilo", Object.keys(STAGE_DASH_LABELS).map((key) => ({ value: key, label: STAGE_DASH_LABELS[key] })), () => {
+      const shapes = selectedShapes();
+      const lines = selectedLines();
+      if (shapes.length && lines.length) return null;
+      return shapes.length ? commonOf(shapes, (item) => item.style?.dash ?? "solid") : commonOf(lines, (item) => item.dash ?? "solid");
+    }, applyDash),
+    arrowStart: valueRow("Ponta inicial", Object.keys(STAGE_ARROW_LABELS).map((key) => ({ value: key, label: STAGE_ARROW_LABELS[key] })), () => commonOf(selectedLines(), (item) => item.arrowStart ?? "none"), (value) => applyArrow("arrowStart", value)),
+    arrowEnd: valueRow("Ponta final", Object.keys(STAGE_ARROW_LABELS).map((key) => ({ value: key, label: STAGE_ARROW_LABELS[key] })), () => commonOf(selectedLines(), (item) => item.arrowEnd ?? "none"), (value) => applyArrow("arrowEnd", value))
+  };
+  area.append(props);
+  function syncProps() {
+    const shapes = selectedShapes();
+    const lines = selectedLines();
+    props.hidden = selection.size === 0;
+    const visible = {
+      stroke: shapes.length > 0,
+      fill: shapes.length > 0,
+      width: shapes.length > 0 || lines.length > 0,
+      dash: shapes.length > 0 || lines.length > 0,
+      arrowStart: lines.length > 0,
+      arrowEnd: lines.length > 0
+    };
+    for (const [key, row] of Object.entries(propRows)) {
+      row.row.hidden = !visible[key];
+      const value = row.read();
+      for (const entry of row.buttons) entry.button.setAttribute("aria-pressed", String(value !== null && entry.value === value));
+    }
+  }
+  // ------------------------------------------------------------------- teclado
+  function editingText() {
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return true;
+    return Boolean(document.querySelector(".smm-node-edit-wrap"));
+  }
+  function ownsInput() {
+    return enabled && (selection.size > 0 || tool.kind !== "select" || gesture !== null);
+  }
+  function consume(event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+  function setTool(next) {
+    tool = next;
+    layer.classList.toggle("is-creating", next.kind !== "select");
+    if (next.kind !== "select") closeFlyouts();
+    syncPalette();
+  }
+  function syncPalette() {
+    for (const entry of toolButtons) entry.button.setAttribute("aria-pressed", String(entry.matches(tool)));
+    for (const group of groupButtons) {
+      const active = group.items.find((entry) => entry.matches(tool));
+      group.button.innerHTML = iconSvg(active ? active.icon : group.icon);
+    }
+  }
+  function runAction(action) {
+    if (action === "delete") removeSelected();
+    else if (action === "duplicate") duplicateSelection();
+    else if (action === "front") reorderSelection("front");
+    else if (action === "back") reorderSelection("back");
+    else if (action === "group") groupSelection();
+    else if (action === "undo") undo();
+    else if (action === "redo") redo();
+  }
+  function onKeyDown(event) {
+    if (!enabled || event.defaultPrevented) return;
+    if (editingText()) return;
+    if (document.querySelector("dialog[open]")) return;
+    const hasModifier = event.ctrlKey || event.metaKey;
+    const key = event.key;
+    const lower = key.toLowerCase();
+    if (hasModifier) {
+      if (lower === "z" && !event.shiftKey) {
+        if (ownUndo && undo()) consume(event);
+        return;
+      }
+      if (lower === "y" || (lower === "z" && event.shiftKey)) {
+        if (ownUndo && redo()) consume(event);
+        return;
+      }
+      if (!ownsInput()) return;
+      if (lower === "a") {
+        consume(event);
+        setSelection(items.filter((item) => item.type !== "group").map((item) => item.id));
+        return;
+      }
+      if (lower === "d") {
+        consume(event);
+        duplicateSelection();
+        return;
+      }
+      if (lower === "g") {
+        consume(event);
+        if (event.shiftKey) ungroupSelection();
+        else groupSelection();
+        return;
+      }
+      if (key === "]" || key === "}") {
+        consume(event);
+        reorderSelection("front");
+        return;
+      }
+      if (key === "[" || key === "{") {
+        consume(event);
+        reorderSelection("back");
+        return;
+      }
+      return;
+    }
+    // Escolher ferramenta nao pode depender de posse: a posse exige selecao ou ferramenta != select,
+    // entao sem isto nao haveria como entrar (nem sair) de uma ferramenta pelo teclado.
+    const toolId = STAGE_TOOL_KEYS[lower];
+    if (toolId && !event.altKey) {
+      consume(event);
+      applyToolKey(toolId);
+      return;
+    }
+    if (!ownsInput()) return;
+    if (key === "Delete" || key === "Backspace") {
+      consume(event);
+      removeSelected();
+      return;
+    }
+    if (key === "Escape") {
+      consume(event);
+      escapeStage();
+      return;
+    }
+    if (key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown") {
+      consume(event);
+      const step = event.shiftKey ? 10 : 1;
+      const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[key];
+      translateSelection(delta[0], delta[1]);
+      return;
+    }
+  }
+  function applyToolKey(toolId) {
+    if (toolId === "select") {
+      setTool({ kind: "select" });
+      return;
+    }
+    if (toolId === "text") {
+      setTool({ kind: "text" });
+      return;
+    }
+    if (toolId === "note") {
+      setTool({ kind: "note" });
+      return;
+    }
+    if (toolId === "connector") {
+      setTool({ kind: "link" });
+      return;
+    }
+    if (STAGE_MARKER_LABELS[toolId]) {
+      setTool({ kind: "marker", marker: toolId });
+      return;
+    }
+    if (STAGE_SHAPE_LABELS[toolId]) {
+      setTool({ kind: "shape", shape: toolId });
+      return;
+    }
+    if (STAGE_LINES.some((line) => line.id === toolId)) setTool({ kind: "line", line: toolId });
+  }
+  function escapeStage() {
+    if (gesture || marquee) {
+      cancelGesture();
+      return;
+    }
+    if (editBox) {
+      closeTextEdit(false);
+      return;
+    }
+    if (tool.kind !== "select") {
+      setTool({ kind: "select" });
+      return;
+    }
+    setSelection([]);
+  }
+  // ------------------------------------------------------------- edicao de texto
+  function closeTextEdit(save) {
+    const box2 = editBox;
+    if (!box2) return;
+    const value = box2.value;
+    const target = editTarget;
+    editBox = null;
+    editTarget = null;
+    box2.remove();
+    if (!save || !target) return;
+    const item = findItem(target);
+    if (!item) return;
+    begin();
+    if (item.type === "connector") item.label = value.replace(/\s+/g, " ").trim();
+    else item.text = { ...item.text ?? {}, value };
+    // Caixa de texto sem texto nao desenha nada: sai em vez de ficar invisivel.
+    if (item.type === "text" && !String(item.text.value).trim()) {
+      items = items.filter((entry) => entry.id !== item.id);
+      selection = /* @__PURE__ */ new Set();
+    }
+    commit();
+    sync();
+  }
+  function startTextEdit(id) {
+    const item = findItem(id);
+    if (!item) return;
+    closeTextEdit(false);
+    let anchor = null;
+    if (item.type === "connector") {
+      const ends = stageConnectorEnds(item, items);
+      if (!ends) return;
+      const at = stagePointAt(stageRoutePath(item, ends.from, ends.to).points, item.labelAt);
+      anchor = { x: at.x - 80, y: at.y - 16, width: 160, height: 32 };
+    } else {
+      const box = stageItemRect(item, items);
+      anchor = { x: box.x, y: box.y, width: box.width, height: Math.max(32, box.height) };
+    }
+    const screen = screenRect(anchor);
+    const areaRect = area.getBoundingClientRect();
+    const paint = stagePaint();
+    const editor2 = el("textarea");
+    editor2.className = "stage-edit";
+    editor2.value = String(item.type === "connector" ? item.label ?? "" : item.text?.value ?? "");
+    editor2.setAttribute("aria-label", item.type === "connector" ? "Rótulo do conector" : "Texto da anotação");
+    Object.assign(editor2.style, {
+      position: "absolute",
+      zIndex: "9",
+      left: `${Math.round(screen.left - areaRect.left)}px`,
+      top: `${Math.round(screen.top - areaRect.top)}px`,
+      width: `${Math.max(160, Math.round(screen.width))}px`,
+      height: `${Math.max(32, Math.round(screen.height))}px`,
+      padding: "6px 8px",
+      border: `1px solid ${paint.color("accent")}`,
+      borderRadius: "8px",
+      background: paint.color("raised"),
+      color: paint.color("text"),
+      caretColor: paint.color("accent"),
+      fontFamily: FONT,
+      fontSize: `${Math.max(10, Math.round(13 * (screen.scale || 1)))}px`,
+      lineHeight: "1.35",
+      resize: "none",
+      boxShadow: "0 12px 32px rgb(0 0 0 / 35%)"
+    });
+    editor2.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeTextEdit(false);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        closeTextEdit(true);
+      }
+    });
+    editor2.addEventListener("blur", () => closeTextEdit(true));
+    area.append(editor2);
+    editBox = editor2;
+    editTarget = id;
+    editor2.focus();
+    editor2.select();
+  }
+  // ------------------------------------------------------------------ gestos
+  function bindDrag(onMove, onEnd) {
+    const move = (event) => {
+      if (event.buttons === 0) {
+        stop(event);
+        return;
+      }
+      onMove(event);
+    };
+    const stop = (event) => {
+      window.removeEventListener("mousemove", move, true);
+      window.removeEventListener("mouseup", stop, true);
+      onEnd(event);
+    };
+    window.addEventListener("mousemove", move, true);
+    window.addEventListener("mouseup", stop, true);
+  }
+  function cancelGesture() {
+    const active = gesture;
+    gesture = null;
+    marquee = null;
+    guides = [];
+    layer.classList.remove("is-marquee");
+    pending = null;
+    if (active) {
+      if (active.kind === "create" || active.kind === "link") items = items.filter((item) => item.id !== active.item.id);
+      else if (active.startItems) items = active.startItems;
+      if (active.kind === "create" || active.kind === "link") selection = /* @__PURE__ */ new Set();
+    }
+    sync();
+  }
+  function itemUnderPointer(event, exclude) {
+    const node = document.elementFromPoint(event.clientX, event.clientY);
+    const holder = stageElement(node)?.closest(".stage-item") ?? null;
+    if (!holder) return null;
+    const id = holder.dataset.id;
+    if (!id || exclude.includes(id)) return null;
+    const item = findItem(id);
+    if (!item || item.type === "connector" || item.type === "group" || item.type === "marker") return null;
+    return item;
+  }
+  function endGesture() {
+    const active = gesture;
+    gesture = null;
+    guides = [];
+    if (!active) return;
+    if (active.kind === "create") {
+      const item = active.item;
+      if (item.type === "connector") {
+        const ends = stageConnectorEnds(item, items);
+        const length2 = ends ? Math.hypot(ends.to.x - ends.from.x, ends.to.y - ends.from.y) : 0;
+        if (length2 < STAGE_MIN_SIZE) {
+          items = items.filter((entry) => entry.id !== item.id);
+          selection = /* @__PURE__ */ new Set();
+        }
+      } else if (item.type !== "marker" && (item.w < STAGE_MIN_SIZE || item.h < STAGE_MIN_SIZE)) {
+        const defaults = STAGE_DEFAULT_BOX[item.type] ?? STAGE_DEFAULT_BOX.shape;
+        const size = item.shape === "circle" || item.shape === "connector" ? { width: defaults.height, height: defaults.height } : defaults;
+        const width = item.type === "shape" ? size.width : defaults.width;
+        const height = item.type === "shape" ? size.height : defaults.height;
+        item.x = Math.round((active.origin.x - width / 2) / STAGE_GRID) * STAGE_GRID;
+        item.y = Math.round((active.origin.y - height / 2) / STAGE_GRID) * STAGE_GRID;
+        item.w = width;
+        item.h = height;
+      }
+      setTool({ kind: "select" });
+    }
+    if (active.kind === "link") {
+      const item = active.item;
+      if (Array.isArray(item.to?.point)) {
+        const ends = stageConnectorEnds(item, items);
+        const length2 = ends ? Math.hypot(ends.to.x - ends.from.x, ends.to.y - ends.from.y) : 0;
+        if (length2 < STAGE_MIN_SIZE) {
+          items = items.filter((entry) => entry.id !== item.id);
+          selection = /* @__PURE__ */ new Set();
+        }
+      }
+      setTool({ kind: "select" });
+    }
+    commit();
+    sync();
+    const born = active.kind === "create" ? active.item : null;
+    if (born && findItem(born.id) && (born.type === "text" || born.type === "note")) startTextEdit(born.id);
+  }
+  function createBoxItem(descriptor, box) {
+    if (descriptor.kind === "shape") {
+      const shape = descriptor.shape ?? "rect";
+      const style = shape === "legend"
+        ? { stroke: "accent", fill: "surface", dash: "solid", width: 1.5 }
+        : shape === "frame"
+          ? { stroke: "border", fill: "none", dash: "dashed", width: 1.5 }
+          : { stroke: "accent", fill: "none", dash: "solid", width: 1.5 };
+      return { id: stageUid("a"), type: "shape", shape, x: box.x, y: box.y, w: box.width, h: box.height, rotation: 0, style, text: { value: "", size: 13, align: "center", color: "text" } };
+    }
+    if (descriptor.kind === "note") {
+      return { id: stageUid("n"), type: "note", x: box.x, y: box.y, w: box.width, h: box.height, text: { value: "", size: 12, color: "text" } };
+    }
+    return { id: stageUid("t"), type: "text", x: box.x, y: box.y, w: box.width, h: box.height, text: { value: "", size: 13, align: "left", color: "text" } };
+  }
+  function createMarkerItem(marker, point) {
+    const size = 22;
+    const total = items.filter((item) => item.type === "marker" && item.marker === "numero").length + 1;
+    return {
+      id: stageUid("m"),
+      type: "marker",
+      marker,
+      x: Math.round((point.x - size / 2) / STAGE_GRID) * STAGE_GRID,
+      y: Math.round((point.y - size / 2) / STAGE_GRID) * STAGE_GRID,
+      size,
+      text: { value: marker === "numero" ? String(total) : "" }
+    };
+  }
+  function createLineItem(descriptor, from, to) {
+    const line = descriptor.kind === "line" ? STAGE_LINES.find((entry) => entry.id === descriptor.line) ?? STAGE_LINES[0] : null;
+    return {
+      id: stageUid("l"),
+      type: "connector",
+      from,
+      to,
+      route: line?.route ?? "straight",
+      arrowStart: line?.arrowStart ?? "none",
+      arrowEnd: line?.arrowEnd ?? "arrow",
+      dash: line?.dash ?? "solid",
+      width: 1.5,
+      label: "",
+      labelAt: 0.5
+    };
+  }
+  function startCreate(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearNodeSelection();
+    const origin = contentPoint(event);
+    begin();
+    const item = tool.kind === "marker"
+      ? createMarkerItem(tool.marker ?? "ponto", origin)
+      : tool.kind === "line" || tool.kind === "link"
+        ? createLineItem(tool, { point: [origin.x, origin.y] }, { point: [origin.x, origin.y] })
+        : createBoxItem(tool, { x: origin.x, y: origin.y, width: 0, height: 0 });
+    items.push(item);
+    selection = /* @__PURE__ */ new Set([item.id]);
+    sync();
+    gesture = { kind: "create", item, origin, descriptor: tool, startItems: null };
+    bindDrag(createMove, endGesture);
+  }
+  function createMove(event) {
+    const active = gesture;
+    if (!active) return;
+    const item = active.item;
+    const pointer = contentPoint(event);
+    if (item.type === "marker") {
+      item.x = pointer.x - item.size / 2;
+      item.y = pointer.y - item.size / 2;
+      sync();
+      return;
+    }
+    if (item.type === "connector") {
+      item.to = { point: [pointer.x, pointer.y] };
+      sync();
+      return;
+    }
+    let width = pointer.x - active.origin.x;
+    let height = pointer.y - active.origin.y;
+    if (event.shiftKey || STAGE_SQUARE_SHAPES[item.shape]) {
+      const size = Math.max(Math.abs(width), Math.abs(height));
+      width = size * (width < 0 ? -1 : 1);
+      height = size * (height < 0 ? -1 : 1);
+    }
+    const box = event.altKey
+      ? { x: active.origin.x - Math.abs(width), y: active.origin.y - Math.abs(height), width: Math.abs(width) * 2, height: Math.abs(height) * 2 }
+      : { x: Math.min(active.origin.x, active.origin.x + width), y: Math.min(active.origin.y, active.origin.y + height), width: Math.abs(width), height: Math.abs(height) };
+    const left = Math.round(box.x / STAGE_GRID) * STAGE_GRID;
+    const top = Math.round(box.y / STAGE_GRID) * STAGE_GRID;
+    const right = Math.round((box.x + box.width) / STAGE_GRID) * STAGE_GRID;
+    const bottom = Math.round((box.y + box.height) / STAGE_GRID) * STAGE_GRID;
+    item.x = left;
+    item.y = top;
+    item.w = Math.max(0, right - left);
+    item.h = Math.max(0, bottom - top);
+    sync();
+  }
+  function startLink(event, fromId, anchor) {
+    if (!fromId) {
+      startCreate(event);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearNodeSelection();
+    const pointer = contentPoint(event);
+    begin();
+    const descriptor = tool.kind === "line" ? tool : { kind: "link" };
+    const item = createLineItem(descriptor, anchor ? { item: fromId, anchor } : { item: fromId, anchor: "auto" }, { point: [pointer.x, pointer.y] });
+    items.push(item);
+    selection = /* @__PURE__ */ new Set([item.id]);
+    sync();
+    gesture = { kind: "link", item, fromId, startItems: null };
+    bindDrag(linkMove, endGesture);
+  }
+  function linkMove(event) {
+    const active = gesture;
+    if (!active) return;
+    const pointer = contentPoint(event);
+    const target = itemUnderPointer(event, [active.item.id, active.fromId]);
+    active.item.to = target ? { item: target.id, anchor: "auto" } : { point: [pointer.x, pointer.y] };
+    sync();
+  }
+  function freePointsOf(item) {
+    const points = {};
+    for (const key of ["from", "to"]) {
+      const end = item[key];
+      if (end && Array.isArray(end.point)) points[key] = [stageNum(end.point[0], 0), stageNum(end.point[1], 0)];
+    }
+    return points;
+  }
+  function startMove(event, id) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearNodeSelection();
+    const now = Date.now();
+    if (lastClick.id === id && now - lastClick.at < STAGE_DOUBLE_CLICK_MS) {
+      lastClick = { id: null, at: 0 };
+      startTextEdit(id);
+      return;
+    }
+    lastClick = { id, at: now };
+    const owner = groupOwnerOf(id);
+    const rootId = owner ? owner.id : id;
+    if (event.shiftKey) {
+      const next = new Set(selection);
+      if (next.has(rootId)) next.delete(rootId);
+      else next.add(rootId);
+      selection = next;
+      normalizeSelection();
+      sync();
+    } else if (!selection.has(rootId)) {
+      setSelection([rootId]);
+    }
+    if (!selection.size) return;
+    const leaves = selectionLeaves();
+    const boxes = leaves.filter((item) => item.type !== "connector").map((item) => stageItemRect(item, items));
+    const frame = boxes.reduce((acc, box) => stageUnionBox(acc, box), null);
+    begin();
+    gesture = {
+      kind: "move",
+      origin: contentPoint(event),
+      moves: leaves.map((item) => ({ item, x: stageNum(item.x, 0), y: stageNum(item.y, 0), points: freePointsOf(item) })),
+      frame,
+      startItems: cloneValue(items)
+    };
+    bindDrag(moveMove, endGesture);
+  }
+  function collectTargets(exclude) {
+    const boxes = stageNodeBoxes(getMindMap());
+    for (const item of items) {
+      if (exclude.has(item.id) || item.type === "group" || item.type === "connector") continue;
+      boxes.push(stageItemRect(item, items));
+    }
+    return boxes;
+  }
+  function snapMove(frame, delta, targets) {
+    const next = { x: Math.round((frame.x + delta.x) / STAGE_GRID) * STAGE_GRID, y: Math.round((frame.y + delta.y) / STAGE_GRID) * STAGE_GRID };
+    const result = { x: next.x, y: next.y, guides: [] };
+    let bestX = null;
+    let bestY = null;
+    for (const box of targets) {
+      const candidatesX = [box.x, box.x + box.width / 2, box.x + box.width];
+      const candidatesY = [box.y, box.y + box.height / 2, box.y + box.height];
+      for (const [axis, candidates, min, max] of [
+        ["x", candidatesX, next.x, next.x + frame.width],
+        ["y", candidatesY, next.y, next.y + frame.height]
+      ]) {
+        for (const value of [min, (min + max) / 2, max]) {
+          for (const candidate of candidates) {
+            const diff = candidate - value;
+            if (Math.abs(diff) > STAGE_SNAP) continue;
+            const best = axis === "x" ? bestX : bestY;
+            if (best && Math.abs(diff) >= Math.abs(best.diff)) continue;
+            const entry = { diff, at: candidate, box };
+            if (axis === "x") bestX = entry;
+            else bestY = entry;
+          }
+        }
+      }
+    }
+    if (bestX) {
+      result.x += bestX.diff;
+      const top = Math.min(result.y, bestX.box.y);
+      const bottom = Math.max(result.y + frame.height, bestX.box.y + bestX.box.height);
+      result.guides.push({ x1: bestX.at, y1: top - 12, x2: bestX.at, y2: bottom + 12 });
+    }
+    if (bestY) {
+      result.y += bestY.diff;
+      const left = Math.min(result.x, bestY.box.x);
+      const right = Math.max(result.x + frame.width, bestY.box.x + bestY.box.width);
+      result.guides.push({ x1: left - 12, y1: bestY.at, x2: right + 12, y2: bestY.at });
+    }
+    return result;
+  }
+  function moveMove(event) {
+    const active = gesture;
+    if (!active) return;
+    const pointer = contentPoint(event);
+    const raw = { x: pointer.x - active.origin.x, y: pointer.y - active.origin.y };
+    let delta = raw;
+    if (active.frame) {
+      const targets = collectTargets(new Set(active.moves.map((entry) => entry.item.id)));
+      const snapped = snapMove(active.frame, raw, targets);
+      delta = { x: snapped.x - active.frame.x, y: snapped.y - active.frame.y };
+      guides = snapped.guides;
+    }
+    for (const entry of active.moves) {
+      const item = entry.item;
+      if (item.type === "connector") {
+        for (const key of Object.keys(entry.points)) {
+          item[key].point = [entry.points[key][0] + delta.x, entry.points[key][1] + delta.y];
+        }
+        continue;
+      }
+      item.x = entry.x + delta.x;
+      item.y = entry.y + delta.y;
+    }
+    sync();
+  }
+  function resizeFrameBox(frame, handle, pointer, keepRatio) {
+    let x = frame.x;
+    let y = frame.y;
+    let right = frame.x + frame.width;
+    let bottom = frame.y + frame.height;
+    if (handle.includes("w")) x = Math.min(pointer.x, right - STAGE_MIN_SIZE);
+    if (handle.includes("e")) right = Math.max(pointer.x, x + STAGE_MIN_SIZE);
+    if (handle.includes("n")) y = Math.min(pointer.y, bottom - STAGE_MIN_SIZE);
+    if (handle.includes("s")) bottom = Math.max(pointer.y, y + STAGE_MIN_SIZE);
+    if (keepRatio && handle.length === 2) {
+      const ratio = frame.height > 0 ? frame.width / frame.height : 1;
+      if ((right - x) / Math.max(1, bottom - y) > ratio) {
+        const height = (right - x) / ratio;
+        if (handle.includes("n")) y = bottom - height;
+        else bottom = y + height;
+      } else {
+        const width = (bottom - y) * ratio;
+        if (handle.includes("w")) x = right - width;
+        else right = x + width;
+      }
+    }
+    return { x, y, width: right - x, height: bottom - y };
+  }
+  function startResize(event, handle, id) {
+    event.preventDefault();
+    event.stopPropagation();
+    const leaves = selectionLeaves();
+    const single = leaves.length === 1 && leaves[0].type !== "connector" ? leaves[0] : null;
+    const boxes = leaves.filter((item) => item.type !== "connector").map((item) => stageItemRect(item, items));
+    const frameBox = single ? stageItemRect(single, items) : boxes.reduce((acc, box) => stageUnionBox(acc, box), null);
+    if (!frameBox) return;
+    begin();
+    gesture = {
+      kind: "resize",
+      handle,
+      frame: frameBox,
+      rotation: single ? stageRotationOf(single) : 0,
+      marker: single?.type === "marker",
+      single,
+      starts: leaves.map((item) => ({ item, box: stageItemRect(item, items), points: freePointsOf(item) })),
+      startItems: cloneValue(items)
+    };
+    bindDrag(resizeMove, endGesture);
+  }
+  function resizeMove(event) {
+    const active = gesture;
+    if (!active) return;
+    const pointer = contentPoint(event);
+    const center = stageBoxCenter(active.frame);
+    const local = active.rotation ? stageRotatePoint(pointer, center, -active.rotation) : pointer;
+    const target = { x: local.x, y: local.y };
+    if (active.handle.includes("w") || active.handle.includes("e")) target.x = Math.round(target.x / STAGE_GRID) * STAGE_GRID;
+    if (active.handle.includes("n") || active.handle.includes("s")) target.y = Math.round(target.y / STAGE_GRID) * STAGE_GRID;
+    const keepRatio = active.marker || ((active.handle === "nw" || active.handle === "ne" || active.handle === "se" || active.handle === "sw") && event.shiftKey);
+    const fixed = handlePoint(active.frame, oppositeHandle(active.handle));
+    const raw = resizeFrameBox(active.frame, active.handle, target, keepRatio);
+    let next = raw;
+    if (active.rotation) {
+      const drawn = stageRotatePoint(fixed, center, active.rotation);
+      const drawnRaw = stageRotatePoint(handlePoint(raw, oppositeHandle(active.handle)), stageBoxCenter(raw), active.rotation);
+      next = { x: raw.x + drawn.x - drawnRaw.x, y: raw.y + drawn.y - drawnRaw.y, width: raw.width, height: raw.height };
+    }
+    guides = [];
+    for (const entry of active.starts) {
+      const item = entry.item;
+      if (item.type === "connector") {
+        const scaleX = active.frame.width > 0 ? next.width / active.frame.width : 1;
+        const scaleY = active.frame.height > 0 ? next.height / active.frame.height : 1;
+        for (const key of Object.keys(entry.points)) {
+          item[key].point = [
+            next.x + (entry.points[key][0] - active.frame.x) * scaleX,
+            next.y + (entry.points[key][1] - active.frame.y) * scaleY
+          ];
+        }
+        continue;
+      }
+      if (active.single) {
+        const box = { x: next.x, y: next.y, width: next.width, height: next.height };
+        if (item.type === "marker") {
+          item.size = Math.max(4, box.width);
+          item.x = box.x;
+          item.y = box.y;
+        } else {
+          item.x = box.x;
+          item.y = box.y;
+          item.w = box.width;
+          item.h = box.height;
+        }
+        continue;
+      }
+      const scaleX = active.frame.width > 0 ? next.width / active.frame.width : 1;
+      const scaleY = active.frame.height > 0 ? next.height / active.frame.height : 1;
+      const box = {
+        x: next.x + (entry.box.x - active.frame.x) * scaleX,
+        y: next.y + (entry.box.y - active.frame.y) * scaleY,
+        width: entry.box.width * scaleX,
+        height: entry.box.height * scaleY
+      };
+      if (item.type === "marker") {
+        item.size = Math.max(4, box.width);
+        item.x = box.x;
+        item.y = box.y;
+      } else {
+        item.x = box.x;
+        item.y = box.y;
+        item.w = box.width;
+        item.h = box.height;
+      }
+    }
+    sync();
+  }
+  function startRotate(event, id) {
+    event.preventDefault();
+    event.stopPropagation();
+    const item = findItem(id);
+    if (!item || item.type === "connector") return;
+    const box = stageItemRect(item, items);
+    const center = stageBoxCenter(box);
+    const start = contentPoint(event);
+    const startAngle = Math.atan2(start.y - center.y, start.x - center.x) * 180 / Math.PI;
+    begin();
+    gesture = {
+      kind: "rotate",
+      item,
+      rotation: stageRotationOf(item),
+      center,
+      startAngle,
+      startItems: cloneValue(items)
+    };
+    bindDrag(rotateMove, endGesture);
+  }
+  function rotateMove(event) {
+    const active = gesture;
+    if (!active) return;
+    const pointer = contentPoint(event);
+    let angle = active.rotation + Math.atan2(pointer.y - active.center.y, pointer.x - active.center.x) * 180 / Math.PI - active.startAngle;
+    if (event.shiftKey) angle = Math.round(angle / STAGE_ROT_STEP) * STAGE_ROT_STEP;
+    active.item.rotation = Math.round(angle * 10) / 10;
+    sync();
+  }
+  function startMarquee(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearNodeSelection();
+    const origin = contentPoint(event);
+    marquee = { origin, box: null };
+    layer.classList.add("is-marquee");
+    renderOverlay();
+    bindDrag((moveEvent) => {
+      const pointer = contentPoint(moveEvent);
+      marquee.box = {
+        x: Math.min(origin.x, pointer.x),
+        y: Math.min(origin.y, pointer.y),
+        width: Math.abs(pointer.x - origin.x),
+        height: Math.abs(pointer.y - origin.y)
+      };
+      renderOverlay();
+    }, () => {
+      const box = marquee?.box;
+      layer.classList.remove("is-marquee");
+      marquee = null;
+      if (box && (box.width > 2 || box.height > 2)) {
+        const roots = /* @__PURE__ */ new Set();
+        for (const item of items) {
+          if (item.type === "group") continue;
+          if (!stageIntersects(box, stageItemRect(item, items))) continue;
+          const owner = groupOwnerOf(item.id);
+          roots.add(owner ? owner.id : item.id);
+        }
+        setSelection([.../* @__PURE__ */ new Set([...selection, ...roots])]);
+        return;
+      }
+      renderOverlay();
+    });
+  }
+  // ------------------------------------------------------------ acoes de edicao
+  function translateItem(item, dx, dy) {
+    if (item.type === "connector") {
+      for (const key of ["from", "to"]) {
+        const end = item[key];
+        if (end && Array.isArray(end.point)) end.point = [stageNum(end.point[0], 0) + dx, stageNum(end.point[1], 0) + dy];
+      }
+      return;
+    }
+    item.x = stageNum(item.x, 0) + dx;
+    item.y = stageNum(item.y, 0) + dy;
+  }
+  function translateSelection(dx, dy) {
+    const leaves = selectionLeaves();
+    if (!leaves.length) return;
+    mutate(() => {
+      for (const item of leaves) translateItem(item, dx, dy);
+    });
+  }
+  function duplicateSelection() {
+    const selected = selectionItems();
+    if (!selected.length) return;
+    const idMap = /* @__PURE__ */ new Map();
+    const copies = [];
+    const copyItem = (item) => {
+      if (idMap.has(item.id)) return idMap.get(item.id);
+      const copy = cloneValue(item);
+      copy.id = stageUid(stagePrefixFor(item));
+      idMap.set(item.id, copy.id);
+      copies.push(copy);
+      if (item.type === "group") {
+        copy.children = (item.children ?? []).map((id) => {
+          const child = findItem(id);
+          return child ? copyItem(child) : null;
+        }).filter(Boolean);
+      }
+      return copy.id;
+    };
+    mutate(() => {
+      selected.forEach(copyItem);
+      for (const copy of copies) {
+        if (copy.type === "connector") {
+          for (const key of ["from", "to"]) {
+            const end = copy[key];
+            if (end && end.item && idMap.has(end.item)) end.item = idMap.get(end.item);
+          }
+          continue;
+        }
+        translateItem(copy, 16, 16);
+      }
+      items.push(...copies);
+      selection = new Set(copies.map((copy) => copy.id));
+    });
+  }
+  function removeSelected() {
+    if (!selection.size) return;
+    mutate(() => {
+      const doomed = new Set(expandIds([...selection]));
+      let next = items.filter((item) => !doomed.has(item.id));
+      next = next.filter((item) => {
+        if (item.type !== "connector") return true;
+        return !["from", "to"].some((key) => {
+          const end = item[key];
+          return Boolean(end && end.item && doomed.has(end.item));
+        });
+      });
+      const exists = (id) => next.some((entry) => entry.id === id);
+      next = next.filter((item) => item.type !== "group" || (item.children ?? []).some(exists));
+      items = next;
+      selection = /* @__PURE__ */ new Set();
+    });
+  }
+  function groupSelection() {
+    const selected = selectionItems();
+    if (selected.length < 2) return;
+    mutate(() => {
+      const members = expandIds(selected.map((item) => item.id)).filter((id) => findItem(id)?.type !== "group");
+      if (members.length < 2) return;
+      const removed = new Set(selected.filter((item) => item.type === "group").map((item) => item.id));
+      items = items.filter((item) => !removed.has(item.id));
+      const group = { id: stageUid("g"), type: "group", children: members, label: "" };
+      items.push(group);
+      selection = /* @__PURE__ */ new Set([group.id]);
+    });
+  }
+  function ungroupSelection() {
+    const groups = selectionItems().filter((item) => item.type === "group");
+    if (!groups.length) return;
+    mutate(() => {
+      const ids = groups.map((item) => item.id);
+      const children = /* @__PURE__ */ new Set(expandIds(ids).filter((id) => findItem(id)?.type !== "group"));
+      const removed = new Set(ids);
+      items = items.filter((item) => !removed.has(item.id));
+      selection = children;
+    });
+  }
+  function reorderSelection(direction) {
+    const ids = new Set(selectionItems().map((item) => item.id));
+    if (!ids.size) return;
+    mutate(() => {
+      const moving = items.filter((item) => ids.has(item.id));
+      const rest = items.filter((item) => !ids.has(item.id));
+      items = direction === "front" ? [...rest, ...moving] : [...moving, ...rest];
+    });
+  }
+  function clearNodeSelection() {
+    try {
+      getMindMap()?.execCommand?.("CLEAR_ACTIVE_NODE");
+    } catch (error) {
+      return;
+    }
+  }
+  function isBlankTarget(target) {
+    return !target.closest(".stage-item") && !target.closest(".stage-handle");
+  }
+  function onAreaMouseDown(event) {
+    if (!enabled || event.button !== 0 || gesture) return;
+    const target = stageElement(event.target);
+    if (!target) return;
+    if (target.closest("#stage-tools") || target.closest("#stage-props")) return;
+    if (editBox && (target === editBox || editBox.contains(target))) return;
+    if (editBox) closeTextEdit(true);
+    if (editingText()) return;
+    const handle = target.closest(".stage-handle");
+    if (handle) {
+      const kind = handle.dataset.handle ?? "";
+      const id = handle.dataset.item || null;
+      if (kind === "rot") startRotate(event, id);
+      else if (kind === "link") startLink(event, id, handle.dataset.anchor ?? "auto");
+      else startResize(event, kind, id);
+      return;
+    }
+    const itemNode = target.closest(".stage-item");
+    if (itemNode?.dataset.id) {
+      const item = findItem(itemNode.dataset.id);
+      const isLinkTool = tool.kind === "link" || tool.kind === "line";
+      if (isLinkTool && (item?.type === "connector" || item?.type === "marker" || !item)) startCreate(event);
+      else if (isLinkTool) startLink(event, item.id, null);
+      else startMove(event, itemNode.dataset.id);
+      return;
+    }
+    if (tool.kind === "select") {
+      if (event.shiftKey && isBlankTarget(target)) {
+        startMarquee(event);
+        return;
+      }
+      if (selection.size) setSelection([]);
+      return;
+    }
+    startCreate(event);
+  }
+  // ---------------------------------------------------------------- ciclo de vida
+  function sanitizeItems(raw) {
+    if (!Array.isArray(raw)) return [];
+    const allowed = ["shape", "connector", "marker", "text", "note", "group"];
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== "object") continue;
+      const type = String(entry.type ?? "");
+      if (!allowed.includes(type)) continue;
+      const item = cloneValue(entry);
+      const id = typeof item.id === "string" && item.id ? item.id : stageUid(stagePrefixFor(item));
+      if (seen.has(id)) continue;
+      seen.add(id);
+      item.id = id;
+      if (type === "group") item.children = (Array.isArray(item.children) ? item.children : []).filter((child) => typeof child === "string" && child !== id);
+      out.push(item);
+    }
+    return out.filter((item) => item.type !== "group" || item.children.some((id) => out.some((entry) => entry.id === id)));
+  }
+  function load(annotations) {
+    const source = annotations && typeof annotations === "object" && Number(annotations.version) === STAGE_VERSION ? annotations.items : null;
+    items = sanitizeItems(source);
+    selection = /* @__PURE__ */ new Set();
+    history.clear();
+    pending = null;
+    ownUndo = false;
+    gesture = null;
+    marquee = null;
+    guides = [];
+    lastClick = { id: null, at: 0 };
+    closeTextEdit(false);
+    closeFlyouts();
+    setTool({ kind: "select" });
+    sync();
+  }
+  function setEnabled(next) {
+    if (next === enabled) return;
+    enabled = next;
+    layer.style.display = next ? "" : "none";
+    palette.hidden = !next;
+    if (!next) {
+      closeTextEdit(false);
+      closeFlyouts();
+      selection = /* @__PURE__ */ new Set();
+      gesture = null;
+      marquee = null;
+      guides = [];
+      overlay.replaceChildren();
+      props.hidden = true;
+      layer.classList.remove("is-creating", "is-marquee");
+      setTool({ kind: "select" });
+      return;
+    }
+    sync();
+  }
+  // ------------------------------------------------------------ export (png/pdf)
+  function adjustExportFrame(rootNode, container, list) {
+    const widthAttr = rootNode.getAttribute("width") ?? "";
+    const heightAttr = rootNode.getAttribute("height") ?? "";
+    if (!widthAttr || !heightAttr || widthAttr.includes("%") || heightAttr.includes("%")) return;
+    const width = Number.parseFloat(widthAttr);
+    const height = Number.parseFloat(heightAttr);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+    const viewBox = rootNode.getAttribute("viewBox");
+    if (viewBox) {
+      const parts = viewBox.trim().split(/[\s,]+/).map(Number);
+      if (parts.length !== 4 || parts.some((value) => !Number.isFinite(value))) return;
+      if (parts[0] !== 0 || parts[1] !== 0 || Math.abs(parts[2] - width) > 1 || Math.abs(parts[3] - height) > 1) return;
+    }
+    const mindMap = getMindMap();
+    const base = stageMeasure(mindMap?.draw?.node) ?? stageNodesBox(mindMap);
+    const own = stageItemsBox(list);
+    if (!base || !own) return;
+    const all = stageUnionBox(base, own);
+    const paddingX = stageNum(mindMap?.opt?.exportPaddingX, 10);
+    const paddingY = stageNum(mindMap?.opt?.exportPaddingY, 10);
+    const shiftX = Math.max(0, base.x - all.x);
+    const shiftY = Math.max(0, base.y - all.y);
+    const neededWidth = all.x + all.width - base.x + paddingX + STAGE_EXPORT_MARGIN + shiftX;
+    const neededHeight = all.y + all.height - base.y + paddingY + STAGE_EXPORT_MARGIN + shiftY;
+    const nextWidth = Math.max(width, Math.ceil(neededWidth));
+    const nextHeight = Math.max(height, Math.ceil(neededHeight));
+    if (nextWidth === width && nextHeight === height && !shiftX && !shiftY) return;
+    rootNode.setAttribute("width", String(nextWidth));
+    rootNode.setAttribute("height", String(nextHeight));
+    if (viewBox) rootNode.setAttribute("viewBox", `0 0 ${nextWidth} ${nextHeight}`);
+    if (shiftX || shiftY) {
+      const current = container.getAttribute("transform");
+      container.setAttribute("transform", `translate(${stageRound(shiftX)} ${stageRound(shiftY)})${current ? ` ${current}` : ""}`);
+    }
+  }
+  // -------------------------------------------------------------------- eventos
+  layer.addEventListener("wheel", (event) => {
+    if (!enabled) return;
+    const svgNode = getMindMap()?.svg?.node;
+    if (!svgNode) return;
+    event.preventDefault();
+    svgNode.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey
+    }));
+  }, { passive: false });
+  area.addEventListener("mousedown", onAreaMouseDown, true);
+  window.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("mousedown", (event) => {
+    const target = stageElement(event.target);
+    if (target && !target.closest(".stage-group")) closeFlyouts();
+  });
+  const themeObserver = new MutationObserver(() => {
+    if (enabled) {
+      renderItems();
+      renderOverlay();
+    }
+  });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  const mindMap = getMindMap();
+  if (mindMap) {
+    mindMap.on("view_data_change", syncView);
+    mindMap.on("node_tree_render_end", syncView);
+    mindMap.on("resize", syncView);
+    // Qualquer mudanca no mapa passa a posse do undo para a lib.
+    mindMap.on("data_change", () => {
+      ownUndo = false;
+    });
+  }
+  window.addEventListener("resize", syncView);
+  syncPalette();
+  return {
+    setEnabled,
+    load,
+    reset() {
+      load(null);
+    },
+    hasItems: () => items.length > 0,
+    getData: () => ({ version: STAGE_VERSION, items: cloneValue(items) }),
+    injectExport(svg2) {
+      const list = items.filter((item) => item.type !== "group");
+      if (!list.length) return;
+      const rootNode = svg2?.node ?? svg2;
+      if (!rootNode || typeof rootNode.querySelector !== "function") return;
+      const container = rootNode.querySelector(".smm-container");
+      if (!container) return;
+      const group = document.createElementNS(STAGE_NS, "g");
+      group.setAttribute("class", "stage-export");
+      group.innerHTML = renderAnnotationsSvg(list, { idPrefix: "stage-export", paint: stagePaint() });
+      container.appendChild(group);
+      adjustExportFrame(rootNode, container, list);
+    }
+  };
+}
+let stage = null;
 function createEditor(container, callbacks) {
   const mindMap = new MindMap2({
     el: container,
@@ -20874,7 +23006,12 @@ function createEditor(container, callbacks) {
     defaultInsertBelowSecondLevelNodeText: NEW_NODE_TEXT,
     mousewheelAction: "zoom",
     // O Ctrl+S é tratado pelo app; os atalhos do mapa só valem com o mouse sobre ele.
-    enableShortcutOnlyWhenMouseInSvg: true
+    enableShortcutOnlyWhenMouseInSvg: true,
+    // A camada do palco entra no clone do SVG exportado, no espaco do conteudo do mapa.
+    handleBeingExportSvg: (svg2) => {
+      stage?.injectExport(svg2);
+      return svg2;
+    }
   });
   let activeNode = null;
   let isLoading = false;
@@ -28450,7 +30587,52 @@ const PATHS = {
   pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   move: '<path d="M3 7.5a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6l1.1 1.1a2 2 0 0 0 1.4.6H19a2 2 0 0 1 2 2v6.7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M6.5 13.5h11M13.5 9.8 17.2 13.5 13.5 17.2"/>',
   trash: '<path d="M3.5 6h17"/><path d="M9 6V4.6A1.6 1.6 0 0 1 10.6 3h2.8A1.6 1.6 0 0 1 15 4.6V6"/><path d="M18.4 6l-.85 13.05A2 2 0 0 1 15.55 21h-7.1a2 2 0 0 1-1.99-1.95L5.6 6"/><path d="M10.2 11v5.5M13.8 11v5.5"/>',
-  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/>'
+  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/>',
+  "stage-select": '<path d="M5.5 3.2 19 11.4l-5.9 1.5-2.6 5.8z"/>',
+  "stage-rect": '<rect x="3.5" y="6" width="17" height="12" rx="1"/>',
+  "stage-round": '<rect x="3.5" y="6" width="17" height="12" rx="4"/>',
+  "stage-ellipse": '<ellipse cx="12" cy="12" rx="8.5" ry="6.5"/>',
+  "stage-circle": '<circle cx="12" cy="12" r="7.5"/>',
+  "stage-diamond": '<path d="M12 3.5 20.5 12 12 20.5 3.5 12z"/>',
+  "stage-decision": '<path d="M12 3.5 20.5 12 12 20.5 3.5 12z"/><path d="M10.3 9.9a1.8 1.8 0 1 1 2.5 1.7c-.5.2-.8.6-.8 1.1v.3M12 15.4h.01"/>',
+  "stage-parallelogram": '<path d="M7.2 6h13l-3.4 12H4z"/>',
+  "stage-trapezoid": '<path d="M7 6h10l4 12H3z"/>',
+  "stage-hexagon": '<path d="M8.2 5.5h7.6l4 6.5-4 6.5H8.2l-4-6.5z"/>',
+  "stage-triangle": '<path d="M12 4.2 20.6 19.5H3.4z"/>',
+  "stage-cylinder": '<ellipse cx="12" cy="6.6" rx="7" ry="2.7"/><path d="M5 6.6v10.8c0 1.5 3.13 2.7 7 2.7s7-1.2 7-2.7V6.6"/>',
+  "stage-database": '<ellipse cx="12" cy="6.4" rx="7" ry="2.6"/><path d="M5 6.4v11.2c0 1.45 3.13 2.6 7 2.6s7-1.15 7-2.6V6.4"/><path d="M5 12c0 1.45 3.13 2.6 7 2.6s7-1.15 7-2.6"/>',
+  "stage-cloud": '<path d="M7.2 18.5h9.4a3.4 3.4 0 0 0 .5-6.8 5.6 5.6 0 0 0-10.7-1.1A3.7 3.7 0 0 0 7.2 18.5z"/>',
+  "stage-arrow-block": '<path d="M3.5 8.5h10.5V5.6L20.5 12l-6.5 6.4v-2.9H3.5z"/>',
+  "stage-terminal": '<rect x="3.5" y="7.5" width="17" height="9" rx="4.5"/>',
+  "stage-process": '<rect x="3.5" y="6.5" width="17" height="11"/>',
+  "stage-document": '<path d="M4.5 6h15v9.6c-2.5 1.9-5-.9-7.5 1-2.5 1.9-5-1-7.5.9z"/>',
+  "stage-delay": '<path d="M4.5 6.5h8.2a5.5 5.5 0 0 1 0 11H4.5z"/>',
+  "stage-subprocess": '<rect x="3.5" y="6.5" width="17" height="11"/><path d="M7.5 6.5v11M16.5 6.5v11"/>',
+  "stage-connector": '<circle cx="12" cy="12" r="5.5"/>',
+  "stage-page": '<path d="M6.5 8.6 17.5 5.6v12.8l-11 2z"/>',
+  "stage-actor": '<circle cx="12" cy="6.2" r="2.9"/><path d="M12 9.1v6.6M8.4 11.6h7.2M12 15.7l-2.8 4.9M12 15.7l2.8 4.9"/>',
+  "stage-flow": '<rect x="3.5" y="8.5" width="7" height="7" rx="1"/><path d="M11 12h6.2"/><path d="M14.6 9.4 17.4 12l-2.8 2.6"/>',
+  "stage-link": '<rect x="2.8" y="8.2" width="6" height="7.6" rx="1"/><rect x="15.2" y="8.2" width="6" height="7.6" rx="1"/><path d="M8.8 12h6.4"/><path d="M12.9 9.7 15.2 12l-2.3 2.3"/>',
+  "stage-line": '<path d="M4.5 19.5 19.5 4.5"/>',
+  "stage-arrow": '<path d="M4.5 19.5 19.5 4.5"/><path d="M19.5 4.5h-5.6M19.5 4.5v5.6"/>',
+  "stage-arrow-double": '<path d="M7 17 17 7"/><path d="M17 7h-4.4M17 7v4.4M7 17h4.4M7 17v-4.4"/>',
+  "stage-elbow": '<path d="M4.5 19.5V11h15"/>',
+  "stage-curve": '<path d="M4.5 19.5C11 19.5 13 4.5 19.5 4.5"/>',
+  "stage-dashed": '<path d="M4.5 19.5 19.5 4.5" stroke-dasharray="4 3"/>',
+  "stage-dotted": '<path d="M4.5 19.5 19.5 4.5" stroke-dasharray="1.5 3"/>',
+  "stage-loopback": '<path d="M4.5 18.5h9a4 4 0 0 0 0-8H6.5"/><path d="M9 7.5 6 10.5l3 3"/>',
+  "stage-ponto": '<circle cx="12" cy="12" r="4.2" fill="currentColor" stroke="none"/>',
+  "stage-numero": '<circle cx="12" cy="12" r="7.6"/><path d="M9.5 5.6 8.2 18.4M15.8 5.6l-1.3 12.8M5.6 10h13M5 14h13"/>',
+  "stage-erro": '<circle cx="12" cy="12" r="7.6"/><path d="M9.4 9.4l5.2 5.2M14.6 9.4l-5.2 5.2"/>',
+  "stage-conferido": '<circle cx="12" cy="12" r="7.6"/><path d="M8.2 12.3 10.8 15l5.2-5.4"/>',
+  "stage-anexo": '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  "stage-marker": '<path d="M12 21s6.4-6.2 6.4-10.8a6.4 6.4 0 0 0-12.8 0C5.6 14.8 12 21 12 21z"/><circle cx="12" cy="10.2" r="2.4"/>',
+  "stage-text": '<path d="M5.5 6.5h13M12 6.5v11.5M9.5 18h5"/>',
+  "stage-legend": '<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M7 10h6M7 14h9"/>',
+  "stage-frame": '<path d="M7.5 3.5v17M16.5 3.5v17M3.5 7.5h17M3.5 16.5h17"/>',
+  "stage-group": '<rect x="3.5" y="3.5" width="10" height="10" rx="1.5"/><rect x="10.5" y="10.5" width="10" height="10" rx="1.5"/>',
+  "stage-front": '<path d="M3.5 8.5v12h12"/><rect x="8" y="3.5" width="12.5" height="12.5" rx="1.5"/>',
+  "stage-back": '<path d="M20.5 15.5v-12h-12"/><rect x="3.5" y="8" width="12.5" height="12.5" rx="1.5"/>'
 };
 function isIconName(name) {
   return name in PATHS;
@@ -29685,7 +31867,7 @@ function createOrgView(container, panelHost, callbacks) {
     },
     exportShare(mapTitle) {
       if (!data2) throw new Error("Nenhum organograma aberto.");
-      return mapToShareJson(mapTitle, "organograma", { orgchart: data2 }, /* @__PURE__ */ new Date());
+      return mapToShareJson(mapTitle, "organograma", { orgchart: data2, ...stage.hasItems() ? { annotations: stage.getData() } : {} }, /* @__PURE__ */ new Date());
     },
     replaceData(next2) {
       stopInlineEdit();
@@ -30749,6 +32931,15 @@ const notePanel = createNotePanel(
   (isVisible) => setPressed("btn-note", isVisible)
 );
 const nodeToolbar = createNodeToolbar(editor, () => notePanel.focus());
+stage = createStage({
+  area: byId("canvas-wrap"),
+  getMindMap: () => editor.getMindMap(),
+  // Qualquer mutacao da camada marca sujo e entra no autosave que ja existe.
+  onChange: () => {
+    if (!openMap || openKind !== "mindmap") return;
+    autosave.schedule();
+  }
+});
 async function saveCurrentMap() {
   if (!openMap) return;
   const { path, meta } = openMap;
@@ -30759,6 +32950,8 @@ async function saveCurrentMap() {
     meta: { ...meta, updatedAt: (/* @__PURE__ */ new Date()).toISOString() },
     ...isOrg ? { orgchart: orgView.getData() } : { mindmap: editor.getData() }
   };
+  // O desenho do palco mora no topo do arquivo; some quando nao ha itens.
+  if (stage.hasItems()) file.annotations = stage.getData();
   try {
     await window.api.saveMap(path, file);
   } catch (error) {
@@ -30813,10 +33006,12 @@ function showMapArea(isOpen) {
   minimap.setMapOpen(isOpen && !isOrg);
   layoutSelect.disabled = !isOpen;
   if (!isOpen || isOrg) nodeToolbar.hide();
+  stage.setEnabled(isOpen && !isOrg);
   if (!isOpen) setSaveState("idle");
 }
 function closeMap() {
   openMap = null;
+  stage.reset();
   autosave.reset();
   sidebar.setActive(null);
   showMapArea(false);
@@ -30837,11 +33032,13 @@ async function openMapAt(path, options = {}) {
   setSaveState("saved");
   sidebar.setActive(path);
   if (openKind === "org" && file.orgchart) {
+    stage.load(file.annotations);
     showMapArea(true);
     orgView.open(file.orgchart, config.theme);
     savedSnapshot = orgView.getSnapshot();
     return;
   }
+  stage.load(file.annotations);
   editor.open(file.mindmap, config.theme);
   savedSnapshot = editor.getSnapshot();
   layoutSelect.value = editor.getLayout();
@@ -30931,7 +33128,7 @@ async function exportData(kind) {
     return mapToShareJson(
       title,
       openMap?.meta.template ?? "livre",
-      { mindmap: editor.getData() },
+      { mindmap: editor.getData(), ...stage.hasItems() ? { annotations: stage.getData() } : {} },
       /* @__PURE__ */ new Date()
     );
   }
