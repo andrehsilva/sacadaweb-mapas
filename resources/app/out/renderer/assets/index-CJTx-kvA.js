@@ -20907,6 +20907,10 @@ const STAGE_TOKEN_LABELS = {
   none: "Sem cor"
 };
 const STAGE_DASHES = { solid: "", dashed: "6 4", dotted: "1.5 3" };
+// Ancora orfa (no removido): o conector continua no ultimo ponto conhecido, tracejado e mais claro.
+const STAGE_ORPHAN_DASH = "6 5";
+const STAGE_ORPHAN_OPACITY = "0.55";
+const STAGE_SIDE_OPPOSITE = { n: "s", s: "n", e: "w", w: "e", ne: "sw", nw: "se", se: "nw", sw: "ne" };
 const STAGE_DASH_LABELS = { solid: "Sólido", dashed: "Tracejado", dotted: "Pontilhado" };
 const STAGE_WIDTHS = [1, 1.5, 2.5];
 const STAGE_ARROW_LABELS = { none: "Sem ponta", arrow: "Seta", dot: "Ponto" };
@@ -21057,6 +21061,38 @@ function stageNormalizeAnchor(anchor) {
   const key = STAGE_ANCHOR_ALIASES[anchor] ?? anchor;
   return !key || key === "auto" ? "auto" : key;
 }
+// Fonte das caixas de no da arvore do palco ativo (mapa mental ou organograma). O desenho
+// resolve { node } por aqui, nunca pelo dado: o ponto e derivado do layout atual e so a
+// ancora fica gravada. O cache guarda o ultimo ponto conhecido de cada no — e ele que
+// sustenta o conector orfao quando o no sai da arvore.
+let stageNodeSource = null;
+function stageSetNodeSource(source) {
+  stageNodeSource = source;
+}
+function stageNodePlace(id) {
+  const source = stageNodeSource;
+  if (!source || typeof id !== "string" || !id) return null;
+  const box = source.lookup(id);
+  if (box) {
+    source.cache.set(id, box);
+    return { box, orphan: false };
+  }
+  const last = source.cache.get(id) ?? null;
+  return last ? { box: last, orphan: true } : null;
+}
+function stageNodeEndPoint(end, other, list, flipSelf) {
+  const place = stageNodePlace(String(end.node));
+  if (!place) return null;
+  const requested = stageNormalizeAnchor(end.anchor);
+  let anchor = requested;
+  if (anchor === "auto") {
+    anchor = stageAutoAnchor(place.box, stageReferencePoint(other, list));
+    // Auto-conexao no mesmo no: o outro extremo nao diz para onde ir, entao a segunda ponta
+    // sai na borda oposta em vez de encostar no mesmo ponto da primeira.
+    if (flipSelf) anchor = STAGE_SIDE_OPPOSITE[anchor] ?? anchor;
+  }
+  return { ...stageAnchorPoint(place.box, anchor, 0), orphan: place.orphan };
+}
 function stageAnchorPoint(box, anchor, rotation) {
   const center = stageBoxCenter(box);
   const points = {
@@ -21084,14 +21120,21 @@ function stageAutoAnchor(box, reference) {
 function stageReferencePoint(end, list) {
   if (!end || typeof end !== "object") return null;
   if (Array.isArray(end.point)) return { x: stageNum(end.point[0], 0), y: stageNum(end.point[1], 0) };
+  // Extremo ancorado em no da arvore: o centro do no vem do layout do palco ativo.
+  if (end.node) {
+    const place = stageNodePlace(String(end.node));
+    return place ? stageBoxCenter(place.box) : null;
+  }
   const target = end.item ? list.find((entry) => entry.id === end.item) : null;
   if (!target) return null;
   return stageBoxCenter(stageItemRect(target, list));
 }
-function stageEndpointPoint(end, list, other) {
+function stageEndpointPoint(end, list, other, flipSelf) {
   if (!end || typeof end !== "object") return null;
   if (Array.isArray(end.point)) return { x: stageNum(end.point[0], 0), y: stageNum(end.point[1], 0) };
-  // { node } fica para a fatia do organograma: aqui so item e ponto livre.
+  // No da arvore (mapa mental/organograma): o ponto encosta na borda da caixa que o palco
+  // informa agora; o dado guarda so a ancora.
+  if (end.node) return stageNodeEndPoint(end, other, list, flipSelf);
   if (!end.item) return null;
   const target = list.find((entry) => entry.id === end.item);
   if (!target || target.type === "connector") return null;
@@ -21101,8 +21144,11 @@ function stageEndpointPoint(end, list, other) {
   return stageAnchorPoint(box, anchor, stageRotationOf(target));
 }
 function stageConnectorEnds(item, list) {
-  const from = stageEndpointPoint(item.from, list, item.to);
-  const to = stageEndpointPoint(item.to, list, item.from);
+  // Ciclo no mesmo no: as duas pontas automaticas cairiam no mesmo ponto, entao a segunda
+  // vai para a borda oposta.
+  const selfLinked = Boolean(item.from?.node) && String(item.from.node) === String(item.to?.node);
+  const from = stageEndpointPoint(item.from, list, item.to, false);
+  const to = stageEndpointPoint(item.to, list, item.from, selfLinked);
   if (!from || !to) return null;
   return { from, to };
 }
@@ -21368,8 +21414,10 @@ function stageConnectorMarkup(item, list, paint, registry, prefix) {
   const route = stageRoutePath(item, ends.from, ends.to);
   const token = item.stroke ?? "accent";
   const width = stageRound(stageNum(item.width, 1.5));
-  const dash = STAGE_DASHES[item.dash ?? "solid"] ?? "";
-  const attrs = `fill="none" stroke="${paint.color(token)}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"${dash ? ` stroke-dasharray="${dash}"` : ""}`;
+  // Ancora orfa (no removido): tracejado mais claro em vez de sumir com o conector.
+  const orphan = Boolean(ends.from.orphan || ends.to.orphan);
+  const dash = orphan ? STAGE_ORPHAN_DASH : STAGE_DASHES[item.dash ?? "solid"] ?? "";
+  const attrs = `fill="none" stroke="${paint.color(token)}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"${dash ? ` stroke-dasharray="${dash}"` : ""}${orphan ? ` stroke-opacity="${STAGE_ORPHAN_OPACITY}"` : ""}`;
   const arrowStart = item.arrowStart && item.arrowStart !== "none" ? ` marker-start="url(#${stageMarkerRef(registry, item.arrowStart, token, "start", paint, prefix)})"` : "";
   const arrowEnd = item.arrowEnd && item.arrowEnd !== "none" ? ` marker-end="url(#${stageMarkerRef(registry, item.arrowEnd, token, "end", paint, prefix)})"` : "";
   const hit = `<path d="${route.d}" fill="none" stroke="transparent" stroke-width="${stageRound(width + 11)}"/>`;
@@ -21379,7 +21427,7 @@ function stageConnectorMarkup(item, list, paint, registry, prefix) {
     const at = stagePointAt(route.points, item.labelAt);
     label = `<text x="${stageRound(at.x)}" y="${stageRound(at.y - 8)}" font-family="${stageEscape(FONT)}" font-size="12" fill="${paint.color("text")}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="${paint.color("surface")}" stroke-width="3.5" stroke-linejoin="round">${stageEscape(item.label)}</text>`;
   }
-  return `<g class="stage-item" data-id="${stageEscape(item.id)}" data-type="connector">${hit}${line}${label}</g>`;
+  return `<g class="stage-item${orphan ? " is-orphan" : ""}" data-id="${stageEscape(item.id)}" data-type="connector"${orphan ? ' data-orphan="true"' : ""}>${hit}${line}${label}</g>`;
 }
 // Unico desenho da camada: usado pela camada ao vivo e pelo export.
 function renderAnnotationsSvg(items, options = {}) {
@@ -21418,18 +21466,35 @@ function stageMeasure(node) {
   }
   return null;
 }
-function stageNodeBoxes(mindMap) {
-  const root = mindMap?.renderer?.root;
-  const boxes = [];
+// Percorre os nos da arvore do mapa mental (raiz da renderizacao, com filhos).
+function stageEachNode(mindMap, visit) {
   const walk = (node) => {
     if (!node) return;
+    visit(node);
+    (node.children ?? []).forEach(walk);
+  };
+  walk(mindMap?.renderer?.root);
+}
+function stageNodeUid(node) {
+  return node?.uid ?? node?.getData?.("uid") ?? null;
+}
+function stageNodeBoxes(mindMap) {
+  const boxes = [];
+  stageEachNode(mindMap, (node) => {
     const width = stageNum(node.width, 0);
     const height = stageNum(node.height, 0);
     if (width > 0 || height > 0) boxes.push({ x: stageNum(node.left, 0), y: stageNum(node.top, 0), width, height });
-    (node.children ?? []).forEach(walk);
-  };
-  walk(root);
+  });
   return boxes;
+}
+// Caixa de um no pelo id, no espaco do conteudo (o mesmo de node.left/top).
+function stageNodeBox(mindMap, id) {
+  let box = null;
+  stageEachNode(mindMap, (node) => {
+    if (box || stageNodeUid(node) !== id) return;
+    box = stageBox(node.left, node.top, stageNum(node.width, 0), stageNum(node.height, 0));
+  });
+  return box;
 }
 function stageNodesBox(mindMap) {
   return stageNodeBoxes(mindMap).reduce((acc, box) => stageUnionBox(acc, box), null);
@@ -21524,6 +21589,54 @@ function createStage(options) {
       height: box.height * transform.scaleY,
       scale: transform.scaleX
     };
+  }
+  // ------------------------------------------------------- ancoras na arvore (fatia 3)
+  // Fonte do palco ativo: no mapa mental as caixas vem de node.left/top (espaco do conteudo,
+  // o mesmo em que a camada desenha); no organograma, das posicoes do layout do render atual.
+  // O cache de cada fonte guarda o ultimo ponto conhecido dos nos e sustenta o conector orfao.
+  const mindNodes = { cache: /* @__PURE__ */ new Map(), lookup: (id) => stageNodeBox(getMindMap(), id) };
+  const orgNodes = { cache: /* @__PURE__ */ new Map(), lookup: (id) => orgHost()?.nodeBox?.(id) ?? null };
+  const nodeSource = () => mode === "org" ? orgNodes : mindNodes;
+  // O desenho le os nos da fonte do palco corrente, que fica ativa tambem fora do desenho
+  // (o fim do gesto mede o conector, o overlay desenha o contorno). O export troca a fonte
+  // pelo layout que ele mesmo calculou e devolve a do palco ao terminar.
+  function withNodeSource(source, run) {
+    const previous = stageNodeSource;
+    stageSetNodeSource(source);
+    try {
+      return run();
+    } finally {
+      stageSetNodeSource(previous);
+    }
+  }
+  // Redesenha com o layout atual: a ancora gravada nao muda, so o ponto derivado dela.
+  function redraw() {
+    if (!enabled) {
+      syncView();
+      return;
+    }
+    renderItems();
+    renderOverlay();
+  }
+  // No da arvore sob o ponteiro por geometria: a camada fica em cima da arvore, entao um
+  // hit-test por DOM bateria na propria camada. Em sobreposicao vence a menor caixa.
+  function nodeUnderPoint(event) {
+    const point = contentPoint(event);
+    let best = null;
+    const consider = (id, box) => {
+      if (!id || !box) return;
+      if (point.x < box.x || point.x > box.x + box.width || point.y < box.y || point.y > box.y + box.height) return;
+      const area = box.width * box.height;
+      if (best && best.area <= area) return;
+      best = { id, area };
+    };
+    const org = orgHost();
+    if (org) {
+      for (const [id, box] of org.positions?.() ?? []) consider(id, box);
+      return best ? best.id : null;
+    }
+    stageEachNode(getMindMap(), (node) => consider(stageNodeUid(node), stageBox(node.left, node.top, stageNum(node.width, 0), stageNum(node.height, 0))));
+    return best ? best.id : null;
   }
   // ------------------------------------------------------------- camada e chrome
   const layer = document.createElementNS(STAGE_NS, "svg");
@@ -21649,6 +21762,7 @@ function createStage(options) {
   }
   // ------------------------------------------------------------------ desenho
   function renderItems() {
+    stageSetNodeSource(nodeSource());
     content.innerHTML = renderAnnotationsSvg(items, { idPrefix: "stage", paint: stagePaint() });
     const marked = new Set(selectionLeaves().map((item) => item.id));
     const org = orgHost();
@@ -22014,7 +22128,11 @@ function createStage(options) {
   function editingText() {
     const active = document.activeElement;
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return true;
-    return Boolean(document.querySelector(".smm-node-edit-wrap"));
+    const wrap = document.querySelector(".smm-node-edit-wrap");
+    // O SDK deixa o elemento no DOM com display:none depois de confirmar a edicao: presenca nao
+    // basta, senao a camada fica morta (teclado e mouse) pelo resto da sessao.
+    if (!wrap) return false;
+    return wrap.offsetParent !== null || getComputedStyle(wrap).display !== "none";
   }
   function ownsInput() {
     return enabled && (selection.size > 0 || tool.kind !== "select" || gesture !== null);
@@ -22450,8 +22568,11 @@ function createStage(options) {
     item.h = Math.max(0, bottom - top);
     sync();
   }
-  function startLink(event, fromId, anchor) {
-    if (!fromId) {
+  // Um extremo do conector nasce ancorado (item de desenho ou no da arvore); o outro
+  // acompanha o ponteiro ate soltar. fromItem entra na exclusao do alvo: item ligado a si
+  // mesmo nao vale, mas o no pode ligar em si (auto-conexao usa as bordas opostas).
+  function startLink(event, fromEnd, fromItem) {
+    if (!fromEnd) {
       startCreate(event);
       return;
     }
@@ -22460,19 +22581,27 @@ function createStage(options) {
     const pointer = contentPoint(event);
     begin();
     const descriptor = tool.kind === "line" ? tool : { kind: "link" };
-    const item = createLineItem(descriptor, anchor ? { item: fromId, anchor } : { item: fromId, anchor: "auto" }, { point: [pointer.x, pointer.y] });
+    const item = createLineItem(descriptor, fromEnd, { point: [pointer.x, pointer.y] });
     items.push(item);
     selection = /* @__PURE__ */ new Set([item.id]);
     sync();
-    gesture = { kind: "link", item, fromId, startItems: null };
+    gesture = { kind: "link", item, fromItem: fromItem ?? null, startItems: null };
     bindDrag(linkMove, endGesture);
+  }
+  // Alvo do conector sob o ponteiro: item de desenho primeiro (a camada esta acima) e, se
+  // nao houver, o no da arvore.
+  function linkEndUnderPointer(event, exclude) {
+    const item = itemUnderPointer(event, exclude);
+    if (item) return { item: item.id, anchor: "auto" };
+    const node = nodeUnderPoint(event);
+    return node ? { node, anchor: "auto" } : null;
   }
   function linkMove(event) {
     const active = gesture;
     if (!active) return;
     const pointer = contentPoint(event);
-    const target = itemUnderPointer(event, [active.item.id, active.fromId]);
-    active.item.to = target ? { item: target.id, anchor: "auto" } : { point: [pointer.x, pointer.y] };
+    const target = linkEndUnderPointer(event, [active.item.id].concat(active.fromItem ? [active.fromItem] : []));
+    active.item.to = target ?? { point: [pointer.x, pointer.y] };
     sync();
   }
   function freePointsOf(item) {
@@ -22899,7 +23028,7 @@ function createStage(options) {
       const kind = handle.dataset.handle ?? "";
       const id = handle.dataset.item || null;
       if (kind === "rot") startRotate(event, id);
-      else if (kind === "link") startLink(event, id, handle.dataset.anchor ?? "auto");
+      else if (kind === "link") startLink(event, { item: id, anchor: handle.dataset.anchor || "auto" }, id);
       else startResize(event, kind, id);
       return;
     }
@@ -22908,9 +23037,19 @@ function createStage(options) {
       const item = findItem(itemNode.dataset.id);
       const isLinkTool = tool.kind === "link" || tool.kind === "line";
       if (isLinkTool && (item?.type === "connector" || item?.type === "marker" || !item)) startCreate(event);
-      else if (isLinkTool) startLink(event, item.id, null);
+      else if (isLinkTool) startLink(event, { item: item.id, anchor: "auto" }, item.id);
       else startMove(event, itemNode.dataset.id);
       return;
+    }
+    // Com a ferramenta de conector/linha ativa sobre um no da arvore, o conector ja nasce
+    // ancorado nele. Sem a ferramenta ativa o no segue o comportamento do palco (arrastar
+    // move o no, clique seleciona) — a camada nao toma o ponteiro.
+    if (tool.kind === "link" || tool.kind === "line") {
+      const nodeId = nodeUnderPoint(event);
+      if (nodeId) {
+        startLink(event, { node: nodeId, anchor: "auto" }, null);
+        return;
+      }
     }
     if (tool.kind === "select") {
       if (event.shiftKey && isBlankTarget(target)) {
@@ -22947,6 +23086,11 @@ function createStage(options) {
     items = sanitizeItems(source);
     selection = /* @__PURE__ */ new Set();
     history.clear();
+    // Arquivo novo, arvore nova: nenhum ultimo ponto conhecido se aproveita (ids de no sao
+    // reaproveitaveis entre arquivos) e a fonte passa a ser a do palco em que ele abre.
+    mindNodes.cache.clear();
+    orgNodes.cache.clear();
+    stageSetNodeSource(nodeSource());
     pending = null;
     ownUndo = false;
     gesture = null;
@@ -23082,9 +23226,11 @@ function createStage(options) {
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   const mindMap = getMindMap();
   if (mindMap) {
-    mindMap.on("view_data_change", syncView);
-    mindMap.on("node_tree_render_end", syncView);
-    mindMap.on("resize", syncView);
+    // Os ganchos em que a camada ja ressincroniza o transform ressincronizam tambem as
+    // ancoras: o ponto do no e derivado no desenho, entao redesenhar basta e o dado nao muda.
+    mindMap.on("view_data_change", redraw);
+    mindMap.on("node_tree_render_end", redraw);
+    mindMap.on("resize", redraw);
     // Qualquer mudanca no mapa passa a posse do undo para a lib.
     mindMap.on("data_change", () => {
       ownUndo = false;
@@ -23093,10 +23239,15 @@ function createStage(options) {
   // ------------------------------------------------- export do organograma (fatia 2)
   // Markup do desenho para entrar no <g> do buildOrgSvg: mesma funcao unica de desenho,
   // agora em string para o SVG/PNG/PDF do palco (o render interativo usa os nos vivos).
-  function orgMarkup(idPrefix) {
+  // positions vem do layout recem-calculado pelo buildOrgSvg: o export nao confia no ultimo
+  // render para saber onde os nos ancorados estao.
+  function orgMarkup(idPrefix, positions) {
     const list = items.filter((item) => item.type !== "group");
     if (!list.length) return "";
-    return `<g class="stage-org">${renderAnnotationsSvg(list, { idPrefix, paint: stagePaint() })}</g>`;
+    const source = positions
+      ? { cache: orgNodes.cache, lookup: (id) => positions.get(id) ?? null }
+      : orgNodes;
+    return `<g class="stage-org">${withNodeSource(source, () => renderAnnotationsSvg(list, { idPrefix, paint: stagePaint() }))}</g>`;
   }
   function bounds() {
     return items.length ? stageItemsBox(items) : null;
@@ -23108,7 +23259,7 @@ function createStage(options) {
   options.getOrg?.()?.attach?.({
     sync: () => sync(),
     apply: (snapshotText) => applyStageSnapshot(snapshotText),
-    markup: (idPrefix) => orgMarkup(idPrefix),
+    markup: (idPrefix, positions) => orgMarkup(idPrefix, positions),
     bounds: () => bounds(),
     // Sem desenho o estado e nulo (o palco nao guarda um stack vazio de anotacoes).
     snapshot: () => (items.length ? snapshot() : null)
@@ -23124,6 +23275,8 @@ function createStage(options) {
     getData: () => ({ version: STAGE_VERSION, items: cloneValue(items) }),
     orgMarkup,
     bounds,
+    // O export do mapa mental le os nos do mapa agora: o conector ancorado sai encostado no
+    // no onde ele esta no layout atual, nao onde estava no ultimo render.
     injectExport(svg2) {
       const list = items.filter((item) => item.type !== "group");
       if (!list.length) return;
@@ -23133,9 +23286,11 @@ function createStage(options) {
       if (!container) return;
       const group = document.createElementNS(STAGE_NS, "g");
       group.setAttribute("class", "stage-export");
-      group.innerHTML = renderAnnotationsSvg(list, { idPrefix: "stage-export", paint: stagePaint() });
-      container.appendChild(group);
-      adjustExportFrame(rootNode, container, list);
+      withNodeSource(mindNodes, () => {
+        group.innerHTML = renderAnnotationsSvg(list, { idPrefix: "stage-export", paint: stagePaint() });
+        container.appendChild(group);
+        adjustExportFrame(rootNode, container, list);
+      });
     }
   };
 }
@@ -30451,8 +30606,10 @@ function buildOrgSvg(data2, options) {
   ) : "";
   // A camada de anotacao (fatia 2) entra dentro do mesmo <g> transladado das caixas: casa
   // coordenadas com o layout e sai no export sem conversao. Vem vazia no render interativo,
-  // onde a camada e injetada viva (senao o desenho apareceria duas vezes).
-  const stageMarkup = options.stageMarkup ?? "";
+  // onde a camada e injetada viva (senao o desenho apareceria duas vezes). No export ela
+  // recebe as posicoes recem-calculadas: os conectores ancorados em no saem no lugar certo
+  // do layout exportado, nao no do ultimo render.
+  const stageMarkup = typeof options.stageMarkup === "function" ? options.stageMarkup(layout2.positions) : options.stageMarkup ?? "";
   const originX = MARGIN + offsetX + (isVertical ? shift : 0);
   const originY = MARGIN + (isVertical ? 0 : shift);
   return {
@@ -31671,6 +31828,9 @@ function createOrgView(container, panelHost, callbacks) {
   let stageHooks = null;
   let stageOrigin = { x: 0, y: 0 };
   let stageBoxes = [];
+  // Posicoes do ultimo render: id do no -> caixa no espaco do conteudo. E por aqui que a
+  // camada ancora o conector em um no e descobre qual no esta sob o ponteiro.
+  let stagePositions = /* @__PURE__ */ new Map();
   const mountStageLayer = () => {
     const inner = layer.firstElementChild;
     if (!inner) return null;
@@ -31686,9 +31846,11 @@ function createOrgView(container, panelHost, callbacks) {
     attach(hooks) {
       stageHooks = hooks;
     },
-    markup: (prefix) => stageHooks?.markup?.(prefix) ?? "",
+    markup: (prefix, positions) => stageHooks?.markup?.(prefix, positions) ?? "",
     bounds: () => stageHooks?.bounds?.() ?? null,
     snapshot: () => stageHooks?.snapshot?.() ?? null,
+    positions: () => stagePositions,
+    nodeBox: (id) => stagePositions.get(id) ?? null,
     // Ponteiro/tela <-> conteudo do organograma pelo mesmo caminho da vista (viewport + origem).
     point(clientX, clientY) {
       const rect = svg2.getBoundingClientRect();
@@ -31734,6 +31896,7 @@ function createOrgView(container, panelHost, callbacks) {
     // O inner foi recriado: a camada de anotacao volta para dentro do <g> transladado e o
     // palco usa as medidas novas (origem do conteudo e caixas) para o hit-test e o encaixe.
     stageOrigin = built.origin;
+    stagePositions = built.positions;
     stageBoxes = [...built.positions.values()].map((box) => ({ x: box.x, y: box.y, width: box.width, height: box.height }));
     mountStageLayer();
     stageHooks?.sync?.();
@@ -32065,7 +32228,7 @@ function createOrgView(container, panelHost, callbacks) {
     if (!data2) throw new Error("Nenhum organograma aberto.");
     // Com interactive: false o mesmo <g> do buildOrgSvg ja leva o desenho: o PNG/PDF/SVG saem.
     const built = expandOrgSheet(
-      buildOrgSvg(data2, { measure, theme: "light", interactive: false, stageMarkup: stageHost.markup("org-export") }),
+      buildOrgSvg(data2, { measure, theme: "light", interactive: false, stageMarkup: (positions) => stageHost.markup("org-export", positions) }),
       stageHost.bounds()
     );
     return {
@@ -32143,7 +32306,7 @@ function createOrgView(container, panelHost, callbacks) {
         mapTitle,
         exportedAt: /* @__PURE__ */ new Date(),
         logoDataUrl,
-        stageMarkup: stageHost.markup("org-export"),
+        stageMarkup: (positions) => stageHost.markup("org-export", positions),
         stageFrame: stageHost.bounds()
       });
     }

@@ -281,7 +281,16 @@ mesma linguagem do resto: superfície elevada, ícones de traço 1.5, um único 
 - **Seleção**: contorno tracejado no acento, oito alças de redimensionar, alça de rotação (`Shift` = 15°) e três
   alças de conexão. O laço de seleção é `Shift`+arrastar no vazio, para não roubar o arraste/pan do mapa.
 - **Posse do teclado**: com um nó do mapa selecionado (e nenhuma anotação por perto), `Del`, setas e `Ctrl+Z`
-  continuam sendo do mapa; a camada só consome o que é dela, e nunca com editor de texto aberto.
+  continuam sendo do mapa; a camada só consome o que é dela, e nunca com editor de texto aberto. As letras de
+  ferramenta (`R`, `O`, `C`…) têm precedência sobre o "digitar uma letra cria um nó" do editor — criar filho e
+  irmão continua em `Tab`/`Enter`, e esse é o preço consciente de ter atalho de ferramenta sem modificador.
+  Cuidado ao mexer no guarda de edição: o SDK deixa `.smm-node-edit-wrap` no DOM com `display: none` depois de
+  confirmar a edição, então **presença não é edição** — checar visibilidade, senão a camada morre pelo resto da
+  sessão depois da primeira edição de texto de nó.
+- **Conectores ancorados**: uma ponta pode apontar para um nó da árvore (`{ node, anchor }`) ou para um ponto
+  livre; o ponto na borda do nó é **derivado no desenho**, nunca gravado, então o conector acompanha relayout,
+  movimento e abertura de subárvore sem reescrever o arquivo. Nó removido não apaga o conector: ele fica no
+  último ponto conhecido, tracejado e mais claro (`is-orphan`), com a âncora órfã preservada no dado.
 - **Conteúdo x chrome**: a pintura dos itens é **inline**, resolvida dos tokens na hora de desenhar, porque o
   SVG exportado é serializado fora do documento e não carrega a folha de estilo; o chrome de edição (camada,
   alças, guias, laço, paleta, painel de propriedades) vive em classes CSS. Trocar de tema redesenha a camada.
