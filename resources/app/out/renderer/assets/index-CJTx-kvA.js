@@ -20880,6 +20880,9 @@ const STAGE_ROT_STEP = 15;
 const STAGE_EXPORT_MARGIN = 8;
 const STAGE_UNDO_LIMIT = 100;
 const STAGE_DOUBLE_CLICK_MS = 400;
+// Duplo-clique so vale se o segundo clique cair no mesmo lugar: um arraste que termina perto
+// do inicio nao pode ser lido como duplo-clique (o ponto de quebra seria apagado).
+const STAGE_CLICK_SLOP = 6;
 const STAGE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const STAGE_LINK_ANCHORS = ["e", "w", "s"];
 const STAGE_TOKEN_VARS = {
@@ -20921,7 +20924,17 @@ const STAGE_LANE_GRIP = 8;
 const STAGE_LANE_LABEL = 26;
 const STAGE_LANE_MIN = 40;
 const STAGE_LANE_DEFAULT = 120;
-const STAGE_ARROW_LABELS = { none: "Sem ponta", arrow: "Seta", dot: "Ponto" };
+// Ponta do conector (fatia 5): alem de sem ponta/seta, entram triangulo, ponto, losango e
+// traco. O painel lista isto em botoes com icone (nao ha <select>), entao cada valor carrega
+// o proprio desenho.
+const STAGE_TIPS = [
+  { value: "none", label: "Sem ponta", icon: "stage-tip-none" },
+  { value: "arrow", label: "Seta", icon: "stage-arrow" },
+  { value: "triangle", label: "Triângulo", icon: "stage-tip-triangle" },
+  { value: "dot", label: "Ponto", icon: "stage-tip-dot" },
+  { value: "diamond", label: "Losango", icon: "stage-tip-diamond" },
+  { value: "bar", label: "Traço", icon: "stage-tip-bar" }
+];
 const STAGE_MARKER_COLOR = { ponto: "accent", numero: "accent", critico: "danger", erro: "warning", conferido: "success", anexo: "muted" };
 const STAGE_MARKER_LABELS = { ponto: "Ponto", numero: "Número", critico: "Crítico", erro: "Erro", conferido: "Conferido", anexo: "Anexo" };
 const STAGE_GEO_SHAPES = [
@@ -21168,6 +21181,27 @@ function stageConnectorEnds(item, list) {
   if (!from || !to) return null;
   return { from, to };
 }
+// Pontos de quebra do conector: o dado guarda pares [x, y] e o vazio e o roteamento
+// automatico. Par malformado nao entra, para o desenho nunca ler lixo de arquivo.
+function stageCustomPoints(item) {
+  if (!Array.isArray(item?.points)) return [];
+  const out = [];
+  for (const point of item.points) {
+    if (!Array.isArray(point) || point.length < 2) continue;
+    if (!Number.isFinite(Number(point[0])) || !Number.isFinite(Number(point[1]))) continue;
+    out.push({ x: stageNum(point[0], 0), y: stageNum(point[1], 0) });
+  }
+  return out;
+}
+// Escreve os pontos de quebra arredondados; lista vazia nao deixa campo no dado (arquivo
+// anterior a fatia 5 reabre sem `points`).
+function stageWritePoints(item, points) {
+  if (!points.length) {
+    delete item.points;
+    return;
+  }
+  item.points = points.map((point) => [stageRound(point.x), stageRound(point.y)]);
+}
 function stagePolyline(points) {
   return points.map((point, index) => `${index === 0 ? "M" : "L"} ${stageRound(point.x)} ${stageRound(point.y)}`).join(" ");
 }
@@ -21181,6 +21215,15 @@ function stageCubicPoint(from, c1, c2, to, t) {
 // Rota do conector: d do path + pontos de amostragem (rotulo e caixa).
 function stageRoutePath(item, from, to) {
   const route = item.route ?? "straight";
+  // Pontos de quebra: os segmentos ligam origem -> pontos -> destino. As pontas continuam
+  // vindo das ancoras (o primeiro e o ultimo ponto se derivam delas a cada desenho), entao
+  // so o miolo do trajeto e manual. Sem pontos, "custom" cai no reto como qualquer rota
+  // desconhecida — arquivo antigo nao muda de aparencia.
+  const custom = stageCustomPoints(item);
+  if (custom.length) {
+    const points = [from, ...custom, to];
+    return { d: stagePolyline(points), points };
+  }
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   if (route === "elbow") {
@@ -21234,6 +21277,35 @@ function stagePointAt(points, at) {
     walked -= lengths[index];
   }
   return points[points.length - 1];
+}
+// Ponteiro projetado no traco desenhado: o segmento mais perto e o ponto dele, a fracao do
+// comprimento (a posicao do rotulo, que anda pelo traco) e o indice do segmento (o ponto de
+// quebra entra ali).
+function stageTraceHit(points, target) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  const lengths = [];
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const length = Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
+    lengths.push(length);
+    total += length;
+  }
+  let walked = 0;
+  let best = null;
+  for (let index = 0; index < lengths.length; index += 1) {
+    const a = points[index];
+    const b = points[index + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length2 = dx * dx + dy * dy;
+    const t = length2 > 0 ? stageClamp(((target.x - a.x) * dx + (target.y - a.y) * dy) / length2, 0, 1) : 0;
+    const at = { x: a.x + dx * t, y: a.y + dy * t };
+    const distance = Math.hypot(target.x - at.x, target.y - at.y);
+    if (!best || distance < best.distance) best = { index, at, distance, walked: walked + lengths[index] * t };
+    walked += lengths[index];
+  }
+  if (!best) return null;
+  return { index: best.index, at: best.at, distance: best.distance, ratio: total > 0 ? stageClamp(best.walked / total, 0, 1) : 0.5 };
 }
 function stageTextLines(value, maxWidth, size) {
   const advance = Math.max(4, size * 0.6);
@@ -21617,17 +21689,36 @@ function stageItemMarkup(item, list, paint) {
   }
   return "";
 }
+// Glifo de cada ponta, no espaco do traco (markerUnits="strokeWidth"): o viewBox e proprio do
+// tipo e o refX encosta o bico na extremidade do path. "arrow" e "dot" ficam exatamente como
+// estavam (arquivo antigo nao muda); as pontas novas entram com desenho proprio.
+function stageMarkerDef(kind, side, color) {
+  const start = side === "start";
+  if (kind === "triangle") {
+    return { view: 12, refX: start ? 1.2 : 10.8, size: 8, glyph: `<path d="${start ? "M 10.8 0.8 L 0 6 L 10.8 11.2 Z" : "M 1.2 0.8 L 12 6 L 1.2 11.2 Z"}" fill="${color}"/>` };
+  }
+  if (kind === "diamond") {
+    return { view: 12, refX: start ? 1.2 : 10.8, size: 7, glyph: `<path d="${start ? "M 10.8 6 L 5.4 1.6 L 0 6 L 5.4 10.4 Z" : "M 1.2 6 L 6.6 1.6 L 12 6 L 6.6 10.4 Z"}" fill="${color}"/>` };
+  }
+  if (kind === "bar") {
+    // Traco perpendicular: a notacao de inicio nao depende da direcao do fluxo.
+    return { view: 10, refX: 5, size: 6, glyph: `<path d="M 5 0.8 V 9.2" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round"/>` };
+  }
+  if (kind === "dot") {
+    return { view: 10, refX: start ? 2.4 : 7.6, size: 6, glyph: `<circle cx="5" cy="5" r="3.4" fill="${color}"/>` };
+  }
+  return {
+    view: 10,
+    refX: start ? 2.4 : 7.6,
+    size: 6,
+    glyph: start ? `<path d="M 9.4 0.6 L 0 5 L 9.4 9.4 Z" fill="${color}"/>` : `<path d="M 0.6 0.6 L 10 5 L 0.6 9.4 Z" fill="${color}"/>`
+  };
+}
 function stageMarkerRef(registry, kind, token, side, paint, prefix) {
   const key = `${kind}-${token}-${side}`;
   if (registry.has(key)) return `${prefix}-${key}`;
-  const color = paint.color(token);
-  const glyph = kind === "dot"
-    ? `<circle cx="5" cy="5" r="3.4" fill="${color}"/>`
-    : side === "start"
-      ? `<path d="M 9.4 0.6 L 0 5 L 9.4 9.4 Z" fill="${color}"/>`
-      : `<path d="M 0.6 0.6 L 10 5 L 0.6 9.4 Z" fill="${color}"/>`;
-  const refX = side === "start" ? 2.4 : 7.6;
-  registry.set(key, `<marker id="${prefix}-${key}" viewBox="0 0 10 10" refX="${refX}" refY="5" markerWidth="6" markerHeight="6" markerUnits="strokeWidth" orient="auto">${glyph}</marker>`);
+  const def = stageMarkerDef(kind, side, paint.color(token));
+  registry.set(key, `<marker id="${prefix}-${key}" viewBox="0 0 ${def.view} ${def.view}" refX="${def.refX}" refY="${def.view / 2}" markerWidth="${def.size}" markerHeight="${def.size}" markerUnits="strokeWidth" orient="auto">${def.glyph}</marker>`);
   return `${prefix}-${key}`;
 }
 function stageConnectorMarkup(item, list, paint, registry, prefix) {
@@ -21647,7 +21738,7 @@ function stageConnectorMarkup(item, list, paint, registry, prefix) {
   let label = "";
   if (String(item.label ?? "").trim()) {
     const at = stagePointAt(route.points, item.labelAt);
-    label = `<text x="${stageRound(at.x)}" y="${stageRound(at.y - 8)}" font-family="${stageEscape(FONT)}" font-size="12" fill="${paint.color("text")}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="${paint.color("surface")}" stroke-width="3.5" stroke-linejoin="round">${stageEscape(item.label)}</text>`;
+    label = `<text class="stage-label" x="${stageRound(at.x)}" y="${stageRound(at.y - 8)}" font-family="${stageEscape(FONT)}" font-size="12" fill="${paint.color("text")}" text-anchor="middle" dominant-baseline="central" paint-order="stroke" stroke="${paint.color("surface")}" stroke-width="3.5" stroke-linejoin="round">${stageEscape(item.label)}</text>`;
   }
   return `<g class="stage-item${orphan ? " is-orphan" : ""}" data-id="${stageEscape(item.id)}" data-type="connector"${orphan ? ' data-orphan="true"' : ""}>${hit}${line}${label}</g>`;
 }
@@ -21773,7 +21864,18 @@ function createStage(options) {
   let gesture = null;
   let marquee = null;
   let guides = [];
-  let lastClick = { id: null, at: 0 };
+  let lastClick = { key: null, at: 0 };
+  // Duplo-clique de uma peca: mesma chave (item + parte), dentro do tempo e no mesmo lugar do
+  // ponteiro. Sem a distancia, um arraste que volta ao ponto de partida viraria duplo-clique
+  // e apagaria o ponto de quebra.
+  const clickKey = (id, part) => `${part}|${id ?? ""}`;
+  function isDoubleClick(key, event) {
+    if (lastClick.key !== key || Date.now() - lastClick.at >= STAGE_DOUBLE_CLICK_MS) return false;
+    return Math.hypot(event.clientX - (lastClick.x ?? event.clientX), event.clientY - (lastClick.y ?? event.clientY)) <= STAGE_CLICK_SLOP;
+  }
+  function markClick(key, event) {
+    lastClick = { key, at: Date.now(), x: event.clientX, y: event.clientY };
+  }
   let editBox = null;
   let editTarget = null;
   let editLane = null;
@@ -22079,6 +22181,22 @@ function createStage(options) {
         }
       }
     }
+    // Pontos de quebra do conector selecionado: a alca e o alvo do arraste e do duplo-clique
+    // que remove. So aparece com o conector selecionado, como as demais alcas.
+    if (single?.type === "connector") {
+      stageCustomPoints(single).forEach((point, index) => {
+        overlay.append(stageSvgEl("circle", {
+          class: "stage-handle",
+          "data-handle": "pt",
+          "data-item": single.id,
+          "data-point": index,
+          cx: stageRound(point.x),
+          cy: stageRound(point.y),
+          r: 4,
+          style: "cursor:move"
+        }));
+      });
+    }
     if (marquee?.box) {
       overlay.append(stageSvgEl("rect", { class: "stage-marquee", x: stageRound(marquee.box.x), y: stageRound(marquee.box.y), width: stageRound(marquee.box.width), height: stageRound(marquee.box.height) }));
     }
@@ -22283,6 +22401,48 @@ function createStage(options) {
     entry.read = read;
     return entry;
   }
+  // Ponta do conector: botao com icone no lugar do <select>, com aria-pressed no ativo (o
+  // mesmo padrao do swatch de cor). O icone da ponta inicial vai espelhado, porque o bico
+  // dela aponta para tras do traco.
+  function tipRow(label, key) {
+    const entry = propsRow(label);
+    for (const option of STAGE_TIPS) {
+      const button2 = el("button", "stage-swatch");
+      button2.type = "button";
+      button2.dataset.tip = option.value;
+      button2.title = option.label;
+      button2.setAttribute("aria-label", option.label);
+      button2.setAttribute("aria-pressed", "false");
+      button2.innerHTML = iconSvg(option.icon);
+      if (key === "arrowStart") button2.firstElementChild.style.transform = "scaleX(-1)";
+      button2.addEventListener("click", () => applyArrow(key, option.value));
+      entry.holder.append(button2);
+      entry.buttons.push({ button: button2, value: option.value });
+    }
+    entry.read = () => commonOf(selectedLines(), (item) => item[key] ?? "none");
+    return entry;
+  }
+  // Rotulo do conector: acao, nao estado — abre o mesmo editor inline do duplo-clique. Fica
+  // no painel para que um conector sem rotulo ainda ganhe texto, ja que o duplo-clique no
+  // segmento passou a criar ponto de quebra.
+  function labelRow() {
+    const entry = propsRow("Rótulo");
+    const button2 = el("button", "stage-swatch");
+    button2.type = "button";
+    button2.dataset.action = "label";
+    button2.title = "Editar rótulo";
+    button2.setAttribute("aria-label", "Editar rótulo do conector");
+    button2.innerHTML = iconSvg("pencil");
+    button2.addEventListener("click", () => {
+      const line = selectedLines()[0];
+      button2.blur();
+      if (line) startTextEdit(line.id);
+    });
+    entry.holder.append(button2);
+    entry.buttons.push({ button: button2, action: true });
+    entry.read = () => null;
+    return entry;
+  }
   const selectedShapes = () => selectionLeaves().filter((item) => item.type === "shape");
   const selectedLines = () => selectionLeaves().filter((item) => item.type === "connector");
   function commonOf(list, read) {
@@ -22343,8 +22503,9 @@ function createStage(options) {
       if (shapes.length && lines.length) return null;
       return shapes.length ? commonOf(shapes, (item) => item.style?.dash ?? "solid") : commonOf(lines, (item) => item.dash ?? "solid");
     }, applyDash),
-    arrowStart: valueRow("Ponta inicial", Object.keys(STAGE_ARROW_LABELS).map((key) => ({ value: key, label: STAGE_ARROW_LABELS[key] })), () => commonOf(selectedLines(), (item) => item.arrowStart ?? "none"), (value) => applyArrow("arrowStart", value)),
-    arrowEnd: valueRow("Ponta final", Object.keys(STAGE_ARROW_LABELS).map((key) => ({ value: key, label: STAGE_ARROW_LABELS[key] })), () => commonOf(selectedLines(), (item) => item.arrowEnd ?? "none"), (value) => applyArrow("arrowEnd", value))
+    arrowStart: tipRow("Ponta inicial", "arrowStart"),
+    arrowEnd: tipRow("Ponta final", "arrowEnd"),
+    label: labelRow()
   };
   area.append(props);
   function syncProps() {
@@ -22356,14 +22517,20 @@ function createStage(options) {
       width: shapes.length > 0 || lines.length > 0,
       dash: shapes.length > 0 || lines.length > 0,
       arrowStart: lines.length > 0,
-      arrowEnd: lines.length > 0
+      arrowEnd: lines.length > 0,
+      // O rotulo e de um conector so: a acao abre o editor de um alvo, nao de um conjunto.
+      label: lines.length === 1 && shapes.length === 0
     };
     // Moldura/raia (e marcador/texto) nao tem linha de propriedade: o painel nao abre vazio.
     props.hidden = selection.size === 0 || !Object.values(visible).some(Boolean);
     for (const [key, row] of Object.entries(propRows)) {
       row.row.hidden = !visible[key];
       const value = row.read();
-      for (const entry of row.buttons) entry.button.setAttribute("aria-pressed", String(value !== null && entry.value === value));
+      for (const entry of row.buttons) {
+        // Botao de acao (rotulo) nao guarda estado: aria-pressed so vale para escolha.
+        if (entry.action) continue;
+        entry.button.setAttribute("aria-pressed", String(value !== null && entry.value === value));
+      }
     }
   }
   // ------------------------------------------------------------------- teclado
@@ -22935,16 +23102,130 @@ function createStage(options) {
     }
     return points;
   }
+  // ------------------------------------------------- pontos de quebra (fatia 5)
+  // Traco desenhado com o ponteiro projetado nele: por aqui passam o ponto que entra no
+  // duplo-clique, o ponto que nasce no Alt+arraste e o rotulo que anda pelo traco.
+  function connectorTrace(item, pointer) {
+    const ends = stageConnectorEnds(item, items);
+    if (!ends) return null;
+    return stageTraceHit(stageRoutePath(item, ends.from, ends.to).points, pointer);
+  }
+  // O ponto novo entra no meio do segmento apontado. O tracado desenhado e origem + pontos +
+  // destino, entao o indice do segmento ja e a posicao do ponto no dado (limitado ao que
+  // existe: rota automatica ainda nao tem ponto nenhum para deslocar).
+  function insertConnectorPoint(item, trace) {
+    const points = stageCustomPoints(item);
+    const index = stageClamp(trace.index, 0, points.length);
+    points.splice(index, 0, trace.at);
+    stageWritePoints(item, points);
+    // So aqui a rota vira "custom": arquivo antigo nao ganha rota nova so por abrir.
+    item.route = "custom";
+    return index;
+  }
+  function removeConnectorPoint(item, index) {
+    const points = stageCustomPoints(item);
+    if (!points[index]) return;
+    points.splice(index, 1);
+    stageWritePoints(item, points);
+    // Sem ponto nenhum o roteamento volta a ser reto e o campo custom sai do dado.
+    if (!points.length && item.route === "custom") item.route = "straight";
+  }
+  function removePointById(id, index) {
+    const item = findItem(id);
+    if (!item) return;
+    mutate(() => removeConnectorPoint(item, index));
+  }
+  // Ponto de quebra: arraste move (Shift trava no eixo dominante como as guias), duplo-clique
+  // na alca remove e o Alt no segmento cria o ponto ja neste gesto — um passo de undo por
+  // alteracao (begin no inicio, commit no fim do gesto).
+  function startPointDrag(event, id, index, startItems = null) {
+    const item = findItem(id);
+    if (!item) return;
+    const start = stageCustomPoints(item);
+    if (!start[index]) return;
+    claimPointer(event);
+    clearNodeSelection();
+    if (!selection.has(item.id)) setSelection([item.id]);
+    begin();
+    gesture = { kind: "point", item, index, start, startItems: startItems ?? cloneValue(items) };
+    bindDrag(pointMove, endGesture);
+  }
+  function pointMove(event) {
+    const active = gesture;
+    if (!active) return;
+    const pointer = contentPoint(event);
+    const origin = active.start[active.index];
+    const next = event.shiftKey
+      ? Math.abs(pointer.x - origin.x) >= Math.abs(pointer.y - origin.y)
+        ? { x: pointer.x, y: origin.y }
+        : { x: origin.x, y: pointer.y }
+      : pointer;
+    stageWritePoints(active.item, active.start.map((point, at) => at === active.index ? { x: next.x, y: next.y } : { ...point }));
+    sync();
+  }
+  // O rotulo anda pelo traco: arrastar grava labelAt (a fracao do comprimento) e o desenho
+  // reposiciona o texto na mesma ancoragem de sempre.
+  function startLabelDrag(event, item) {
+    claimPointer(event);
+    clearNodeSelection();
+    // A marcacao entra aqui para o segundo clique (o que abre o editor) reconhecer o rotulo
+    // como o mesmo alvo — o duplo-clique no texto continua editando.
+    markClick(clickKey(item.id, "item"), event);
+    if (!selection.has(item.id)) setSelection([item.id]);
+    begin();
+    gesture = { kind: "label", item, startItems: cloneValue(items) };
+    bindDrag((moveEvent) => {
+      const trace = connectorTrace(item, contentPoint(moveEvent));
+      if (!trace) return;
+      item.labelAt = stageRound(trace.ratio);
+      sync();
+    }, endGesture);
+  }
+  // Ponteiro dentro do conector: o rotulo volta ao editor de texto, o segmento cria ponto de
+  // quebra (duplo-clique) ou ganha um arrastando (Alt) e o corpo continua sendo o arraste de
+  // sempre. O conector orfao nao se reconecta aqui: so os pontos do dado mudam.
+  function startConnectorDown(event, item) {
+    const key = clickKey(item.id, "item");
+    const onLabel = Boolean(stageElement(event.target)?.closest(".stage-label"));
+    const repeat = isDoubleClick(key, event);
+    const trace = connectorTrace(item, contentPoint(event));
+    if (event.altKey && trace) {
+      // begin antes de criar: o ponto e o arraste entram no undo como um passo so e o
+      // cancelamento devolve o desenho sem o ponto novo.
+      const before = cloneValue(items);
+      begin();
+      const index = insertConnectorPoint(item, trace);
+      startPointDrag(event, item.id, index, before);
+      return;
+    }
+    if (repeat) {
+      // A posse vem junto: sem o default cancelado o navegador move o foco no mousedown e o
+      // editor que acabou de abrir perde o foco e fecha.
+      claimPointer(event);
+      lastClick = { key: null, at: 0 };
+      if (onLabel || !trace) {
+        startTextEdit(item.id);
+        return;
+      }
+      mutate(() => insertConnectorPoint(item, trace));
+      return;
+    }
+    if (onLabel) {
+      startLabelDrag(event, item);
+      return;
+    }
+    startMove(event, item.id, null);
+  }
   function startMove(event, id, lane = null) {
     claimPointer(event);
     clearNodeSelection();
-    const now = Date.now();
-    if (lastClick.id === id && lastClick.lane === lane && now - lastClick.at < STAGE_DOUBLE_CLICK_MS) {
-      lastClick = { id: null, lane: null, at: 0 };
+    const key = clickKey(id, lane ? `lane:${lane}` : "item");
+    if (isDoubleClick(key, event)) {
+      lastClick = { key: null, at: 0 };
       startTextEdit(id, lane);
       return;
     }
-    lastClick = { id, lane, at: now };
+    markClick(key, event);
     const owner = groupOwnerOf(id);
     const rootId = owner ? owner.id : id;
     if (event.shiftKey) {
@@ -22967,7 +23248,7 @@ function createStage(options) {
     gesture = {
       kind: "move",
       origin: contentPoint(event),
-      moves: leaves.map((item) => ({ item, x: stageNum(item.x, 0), y: stageNum(item.y, 0), points: freePointsOf(item) })),
+      moves: leaves.map((item) => ({ item, x: stageNum(item.x, 0), y: stageNum(item.y, 0), points: freePointsOf(item), breaks: stageCustomPoints(item) })),
       roots: roots.map((item) => item.id),
       frame,
       startItems: cloneValue(items)
@@ -23040,6 +23321,8 @@ function createStage(options) {
         for (const key of Object.keys(entry.points)) {
           item[key].point = [entry.points[key][0] + delta.x, entry.points[key][1] + delta.y];
         }
+        // Os pontos de quebra andam junto: arrastar o conector nao pode deformar o trajeto.
+        if (entry.breaks?.length) stageWritePoints(item, entry.breaks.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })));
         continue;
       }
       item.x = entry.x + delta.x;
@@ -23097,7 +23380,7 @@ function createStage(options) {
       rotation: single ? stageRotationOf(single) : 0,
       marker: single?.type === "marker",
       single,
-      starts: leaves.map((item) => ({ item, box: stageItemRect(item, items), points: freePointsOf(item) })),
+      starts: leaves.map((item) => ({ item, box: stageItemRect(item, items), points: freePointsOf(item), breaks: stageCustomPoints(item) })),
       startItems: cloneValue(items)
     };
     bindDrag(resizeMove, endGesture);
@@ -23131,6 +23414,13 @@ function createStage(options) {
             next.x + (entry.points[key][0] - active.frame.x) * scaleX,
             next.y + (entry.points[key][1] - active.frame.y) * scaleY
           ];
+        }
+        // Os pontos de quebra escalam junto (o trajeto acompanha a escala do conjunto).
+        if (entry.breaks?.length) {
+          stageWritePoints(item, entry.breaks.map((point) => ({
+            x: next.x + (point.x - active.frame.x) * scaleX,
+            y: next.y + (point.y - active.frame.y) * scaleY
+          })));
         }
         continue;
       }
@@ -23273,6 +23563,8 @@ function createStage(options) {
         const end = item[key];
         if (end && Array.isArray(end.point)) end.point = [stageNum(end.point[0], 0) + dx, stageNum(end.point[1], 0) + dy];
       }
+      const breaks = stageCustomPoints(item);
+      if (breaks.length) stageWritePoints(item, breaks.map((point) => ({ x: point.x + dx, y: point.y + dy })));
       return;
     }
     item.x = stageNum(item.x, 0) + dx;
@@ -23408,7 +23700,21 @@ function createStage(options) {
     if (handle) {
       const kind = handle.dataset.handle ?? "";
       const id = handle.dataset.item || null;
-      if (kind === "rot") startRotate(event, id);
+      if (kind === "pt") {
+        // Alca do ponto de quebra: duplo-clique remove, clique simples abre o arraste. A posse
+        // vem aqui para o clique que remove valer nos dois palcos (o do organograma engole o
+        // clique que fecharia o gesto).
+        claimPointer(event);
+        const index = Number(handle.dataset.point);
+        const key = clickKey(id, `pt:${index}`);
+        if (isDoubleClick(key, event)) {
+          lastClick = { key: null, at: 0 };
+          removePointById(id, index);
+        } else {
+          markClick(key, event);
+          startPointDrag(event, id, index);
+        }
+      } else if (kind === "rot") startRotate(event, id);
       else if (kind === "link") startLink(event, { item: id, anchor: handle.dataset.anchor || "auto" }, id);
       else startResize(event, kind, id);
       return;
@@ -23430,6 +23736,7 @@ function createStage(options) {
       if (!isLinkTool && item?.type === "frame" && tool.kind !== "select") startCreate(event);
       else if (isLinkTool && (item?.type === "connector" || item?.type === "marker" || !item)) startCreate(event);
       else if (isLinkTool) startLink(event, { item: item.id, anchor: "auto" }, item.id);
+      else if (item?.type === "connector" && tool.kind === "select") startConnectorDown(event, item);
       else startMove(event, itemNode.dataset.id, lane);
       return;
     }
@@ -23490,6 +23797,14 @@ function createStage(options) {
         size: Math.max(STAGE_LANE_MIN, stageNum(lane?.size, STAGE_LANE_DEFAULT))
       }));
     }
+    // Pontos de quebra (fatia 5): par de numeros ou nao entra. Sem ponto nenhum o campo nao
+    // existe no dado (arquivo anterior a fatia 5 reabre igual) e a rota custom sem pontos
+    // volta a ser reta: o desenho nunca depende de um campo vazio.
+    for (const item of out) {
+      if (item.type !== "connector") continue;
+      stageWritePoints(item, stageCustomPoints(item));
+      if (!item.points && item.route === "custom") item.route = "straight";
+    }
     const kept = out.filter((item) => item.type !== "group" || item.children.some((id) => out.some((entry) => entry.id === id)));
     const lives = (id) => kept.some((entry) => entry.id === id);
     for (const item of kept) {
@@ -23512,7 +23827,7 @@ function createStage(options) {
     gesture = null;
     marquee = null;
     guides = [];
-    lastClick = { id: null, lane: null, at: 0 };
+    lastClick = { key: null, at: 0 };
     closeTextEdit(false);
     closeFlyouts();
     setTool({ kind: "select" });
@@ -31361,6 +31676,11 @@ const PATHS = {
   "stage-line": '<path d="M4.5 19.5 19.5 4.5"/>',
   "stage-arrow": '<path d="M4.5 19.5 19.5 4.5"/><path d="M19.5 4.5h-5.6M19.5 4.5v5.6"/>',
   "stage-arrow-double": '<path d="M7 17 17 7"/><path d="M17 7h-4.4M17 7v4.4M7 17h4.4M7 17v-4.4"/>',
+  "stage-tip-none": '<path d="M3.5 12h17"/>',
+  "stage-tip-triangle": '<path d="M3.5 12h8"/><path d="M11.5 6.8 20.5 12l-9 5.2z"/>',
+  "stage-tip-dot": '<path d="M3.5 12h9.5"/><circle cx="17" cy="12" r="3.6" fill="currentColor" stroke="none"/>',
+  "stage-tip-diamond": '<path d="M3.5 12h6.5"/><path d="M20 12 15 7.6 10 12l5 4.4z"/>',
+  "stage-tip-bar": '<path d="M3.5 12h13.5"/><path d="M17 5.5v13"/>',
   "stage-elbow": '<path d="M4.5 19.5V11h15"/>',
   "stage-curve": '<path d="M4.5 19.5C11 19.5 13 4.5 19.5 4.5"/>',
   "stage-dashed": '<path d="M4.5 19.5 19.5 4.5" stroke-dasharray="4 3"/>',

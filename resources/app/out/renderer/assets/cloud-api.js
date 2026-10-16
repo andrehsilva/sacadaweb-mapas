@@ -5,11 +5,17 @@
   const MAP_EXTENSION = ".swmap.json";
   const FILE_EXTENSION = ".json"; // nome do arquivo no bucket (a extensão precisa ser .json)
   const TEMPLATES = ["livre", "pop-sacadaweb", "organograma"];
+  // Arquivo pode trazer o desenho livre; criar um desses ainda não é papel deste cliente.
+  const FILE_TEMPLATES = [...TEMPLATES, "desenho"];
   const MAX_MAP_BYTES = 20 * 1024 * 1024;
   const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
   const MAX_VERSIONS = 20;
   const MAX_COPY_ATTEMPTS = 500;
   const MAX_ORG_NODES = 5000;
+  const MAX_DRAWING_STROKES = 20000;
+  const MAX_STROKE_POINTS = 20000;
+  const MAX_STROKE_WIDTH = 200;
+  const MAX_TOKEN_CHARS = 32;
   const MIN_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
   const PAGE_SIZE = 100;
   const MAP_VERSION = 1;
@@ -28,6 +34,7 @@
   const BAD_FORMAT = "O arquivo não tem o formato de um mapa do SacadaWeb-Mapas.";
   const BAD_ORG = "O organograma deste arquivo está incompleto ou corrompido e não foi aberto.";
   const BAD_DATA = "Dados do mapa inválidos.";
+  const BAD_DRAWING = "Os dados do desenho estão inválidos.";
 
   const KIND_BY_EXTENSION = {
     ".xmind": "xmind", ".mm": "freemind", ".md": "markdown", ".markdown": "markdown",
@@ -185,6 +192,54 @@
     return { nodes: [{ id: "raiz", parentId: null, title }], links: [], settings: { ...DEFAULT_ORG_SETTINGS } };
   }
 
+  // Desenho livre: cor e fundo são nomes curtos de token (nunca hex).
+  const DRAWING_PENS = ["ink", "pencil", "marker", "highlighter", "charcoal", "watercolor", "neon", "spray"];
+  const DRAWING_PAPER_SIZES = ["free", "a4", "a3", "square"];
+  const DRAWING_PAPER_GRIDS = ["none", "grid", "dots", "ruled"];
+
+  function isFiniteNumber(value) {
+    return typeof value === "number" && Number.isFinite(value);
+  }
+
+  function isToken(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= MAX_TOKEN_CHARS;
+  }
+
+  // Um ponto é [x, y, pressão]; um traço pode ter um ponto só (um toque).
+  function isPoint(value) {
+    if (!Array.isArray(value) || value.length !== 3) return false;
+    if (!isFiniteNumber(value[0]) || !isFiniteNumber(value[1]) || !isFiniteNumber(value[2])) return false;
+    return value[2] >= 0 && value[2] <= 1;
+  }
+
+  function isStroke(value) {
+    if (!isRecord(value)) return false;
+    if (!DRAWING_PENS.includes(value.pen)) return false;
+    if (!isToken(value.color)) return false;
+    if (!isFiniteNumber(value.width) || value.width <= 0 || value.width > MAX_STROKE_WIDTH) return false;
+    if (!isFiniteNumber(value.opacity) || value.opacity < 0 || value.opacity > 1) return false;
+    if (value.seed !== undefined && !isFiniteNumber(value.seed)) return false;
+    if (!Array.isArray(value.points) || value.points.length === 0 || value.points.length > MAX_STROKE_POINTS) return false;
+    return value.points.every(isPoint);
+  }
+
+  function isDrawingPaper(value) {
+    if (value === undefined) return true;
+    if (!isRecord(value)) return false;
+    if (value.size !== undefined && !DRAWING_PAPER_SIZES.includes(value.size)) return false;
+    if (value.grid !== undefined && !DRAWING_PAPER_GRIDS.includes(value.grid)) return false;
+    if (value.background !== undefined && !isToken(value.background)) return false;
+    return true;
+  }
+
+  function isDrawingData(value) {
+    if (!isRecord(value)) return false;
+    if (value.version !== 1) return false;
+    if (!Array.isArray(value.strokes) || value.strokes.length > MAX_DRAWING_STROKES) return false;
+    if (!value.strokes.every(isStroke)) return false;
+    return isDrawingPaper(value.paper);
+  }
+
   // Mesmas regras do app antigo: valida o objeto antes de gravar e ao abrir.
   function parseMapFile(file) {
     if (!isRecord(file)) throw error(BAD_FORMAT, "http");
@@ -195,9 +250,11 @@
     if (!isRecord(meta) || typeof meta.title !== "string" || !meta.title.trim() || meta.title.length > 200) {
       throw error(BAD_FORMAT, "http");
     }
-    if (!TEMPLATES.includes(meta.template)) throw error(BAD_FORMAT, "http");
+    if (!FILE_TEMPLATES.includes(meta.template)) throw error(BAD_FORMAT, "http");
     if (meta.template === "organograma") {
       if (!isOrgChartData(file.orgchart)) throw error(BAD_ORG, "http");
+    } else if (meta.template === "desenho") {
+      if (!isDrawingData(file.drawing)) throw error(BAD_DRAWING, "http");
     } else if (!isMindNode(file.mindmap)) {
       throw error(BAD_DATA, "http");
     }
