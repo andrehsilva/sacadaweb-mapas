@@ -20888,6 +20888,9 @@ const STAGE_LINK_ANCHORS = ["e", "w", "s"];
 const STAGE_TOKEN_VARS = {
   accent: "--color-accent",
   "accent-strong": "--color-accent-strong",
+  // Fundo da mesa do palco: o papel do desenho pode ser pintado com ele (a folha de trabalho
+  // e o --color-surface; a mesa e o --color-bg).
+  bg: "--color-bg",
   text: "--color-text",
   muted: "--color-text-muted",
   surface: "--color-surface",
@@ -20902,11 +20905,15 @@ const STAGE_TOKEN_VARS = {
 const STAGE_SWATCH_TOKENS = ["accent", "text", "muted", "danger", "warning", "success", "none"];
 const STAGE_TOKEN_LABELS = {
   accent: "Acento",
+  "accent-strong": "Acento forte",
   text: "Texto",
   muted: "Discreto",
   danger: "Perigo",
   warning: "Atenção",
   success: "Sucesso",
+  surface: "Folha",
+  raised: "Elevado",
+  bg: "Mesa",
   none: "Sem cor"
 };
 const STAGE_DASHES = { solid: "", dashed: "6 4", dotted: "1.5 3" };
@@ -20999,6 +21006,64 @@ const STAGE_MARKERS = [
   { id: "anexo", label: "Anexo", icon: "stage-anexo" }
 ];
 const STAGE_TOOL_KEYS = { v: "select", r: "rect", o: "ellipse", d: "diamond", l: "line", a: "arrow", c: "connector", t: "text", n: "note", p: "ponto", m: "critico" };
+// ------------------------------------------- desenho a mao livre (fatia 6a)
+// O traco nao e um `stroke` de espessura fixa: ele sai como CONTORNO PREENCHIDO, porque a
+// largura acompanha a pressao/velocidade. A geometria e toda local (offset das amostras +
+// fechamento nas pontas): nenhuma dependencia nova entra por causa do desenho.
+const DRAWING_VERSION = 1;
+const STAGE_PEN_IDS = ["ink", "pencil", "marker", "highlighter"];
+const STAGE_PENS = [
+  { id: "ink", label: "Caneta", icon: "stage-pen", key: "P" },
+  { id: "pencil", label: "Lápis", icon: "pencil", key: "B" },
+  { id: "marker", label: "Marcador", icon: "stage-chisel", key: "M" },
+  { id: "highlighter", label: "Marca-texto", icon: "stage-highlighter", key: "H" }
+];
+// Espessura base por caneta (px do conteudo, na pressao maxima) e os tres tamanhos do seletor:
+// o arquivo grava a espessura resolvida, nunca o indice.
+const STAGE_PEN_BASE = { ink: 4, pencil: 2.5, marker: 16, highlighter: 28 };
+const STAGE_PEN_OPACITY = { ink: 1, pencil: 0.9, marker: 0.85, highlighter: 0.4 };
+// Quanto da espessura sobrevive quando a pressao chega a zero: a faixa do marca-texto e reta.
+const STAGE_PEN_TAPER = { ink: 0.35, pencil: 0.3, marker: 0.25, highlighter: 1 };
+const STAGE_PEN_FACTORS = [0.5, 1, 2];
+const STAGE_PEN_SIZES = ["Fina", "Média", "Grossa"];
+const STAGE_INK_TOKENS = ["text", "muted", "accent", "accent-strong", "danger", "warning", "success"];
+const STAGE_INK_COLOR = "text";
+const STAGE_INK_SIZE = 1;
+const STAGE_PEN_SPEED_REF = 2.4;
+const STAGE_PEN_MIN_STEP = 1.2;
+const STAGE_PEN_SMOOTH = 0.6;
+const STAGE_ERASER_RADIUS = 14;
+// Atalhos do desenho: valem so no modo desenho, onde as teclas de marcador do palco nao estao
+// em jogo (no mapa mental e no organograma P/M continuam sendo ponto/critico).
+const STAGE_DRAW_KEYS = { p: "ink", b: "pencil", m: "marker", h: "highlighter", e: "eraser" };
+const STAGE_DRAW_MIN_SCALE = 0.08;
+const STAGE_DRAW_MAX_SCALE = 8;
+const STAGE_DRAW_PADDING = 24;
+const STAGE_PAPER_SIZES = {
+  a4: { width: 794, height: 1123 },
+  a3: { width: 1123, height: 1587 },
+  square: { width: 1000, height: 1000 }
+};
+const STAGE_PAPER_SIZE_OPTIONS = [
+  { value: "a4", label: "A4" },
+  { value: "a3", label: "A3" },
+  { value: "square", label: "Quadrado" },
+  { value: "free", label: "Livre" }
+];
+const STAGE_PAPER_GRIDS = [
+  { value: "none", label: "Lisa" },
+  { value: "grid", label: "Grade" },
+  { value: "dots", label: "Pontos" },
+  { value: "ruled", label: "Pauta" }
+];
+const STAGE_PAPER_BACKGROUNDS = ["bg", "surface", "raised", "none"];
+const STAGE_PAPER_FREE = { width: 794, height: 1123 };
+const STAGE_PAPER_STEP = { grid: 24, dots: 24, ruled: 32 };
+const STAGE_PAPER_MAX_LINES = 180;
+const STAGE_PAPER_MAX_DOTS = 48;
+const STAGE_PAPER_RULED_MARGIN = 64;
+const STAGE_PAPER_MARGIN = 40;
+const STAGE_PAPER_MIN_SIDE = 240;
 // O dado guarda a ancora canonica; apelidos entram pela porta da leitura.
 const STAGE_ANCHOR_ALIASES = { right: "e", left: "w", top: "n", bottom: "s", center: "auto", middle: "auto", centre: "auto" };
 let stageUidSeq = 0;
@@ -21763,6 +21828,301 @@ function renderAnnotationsSvg(items, options = {}) {
   const defs = registry.size > 0 ? `<defs>${[...registry.values()].join("")}</defs>` : "";
   return defs + body.join("");
 }
+// ---------------------------------------------- traco a mao livre (fatia 6a)
+// Estas funcoes sao o desenho unico do traco: a camada ao vivo, o export PNG/SVG/PDF e o
+// hit-test da borracha leem todas daqui (mesma geometria, mesmos filtros, mesmo seed).
+function stagePenId(value) {
+  return STAGE_PEN_IDS.includes(value) ? value : "ink";
+}
+function stageInkColor(value) {
+  return STAGE_INK_TOKENS.includes(value) ? value : STAGE_INK_COLOR;
+}
+function stageSeed(value) {
+  const seed = Math.abs(Math.round(stageNum(value, 0)));
+  return seed > 0 ? seed : 1;
+}
+function stageRandomSeed() {
+  return Math.floor(Math.random() * 99991) + 7;
+}
+function stagePenWidth(pen, index) {
+  const size = stageClamp(Math.round(stageNum(index, STAGE_INK_SIZE)), 0, STAGE_PEN_FACTORS.length - 1);
+  return stageRound((STAGE_PEN_BASE[stagePenId(pen)] ?? STAGE_PEN_BASE.ink) * STAGE_PEN_FACTORS[size]);
+}
+// Tamanho corrente da caneta e o indice do seletor que o representa (o dado guarda a
+// espessura, entao o botao aceso e o tamanho resolvido mais proximo).
+function stagePenSizeIndex(pen, width) {
+  const base = STAGE_PEN_BASE[stagePenId(pen)] ?? STAGE_PEN_BASE.ink;
+  const target = stageNum(width, base);
+  let best = STAGE_INK_SIZE;
+  let bestDelta = Infinity;
+  STAGE_PEN_FACTORS.forEach((factor, index) => {
+    const delta = Math.abs(base * factor - target);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = index;
+    }
+  });
+  return best;
+}
+// Catmull-Rom convertida em cubica e achatada em passo curto: a mesma polilinha sustenta o
+// contorno do desenho e o hit-test da borracha.
+function stageStrokeSamples(points) {
+  const raw = [];
+  for (const entry of Array.isArray(points) ? points : []) {
+    if (!Array.isArray(entry)) continue;
+    const point = { x: stageNum(entry[0], 0), y: stageNum(entry[1], 0), p: stageClamp(stageNum(entry[2], 0.5), 0.02, 1) };
+    const last = raw[raw.length - 1];
+    if (last && Math.hypot(point.x - last.x, point.y - last.y) < 0.4) {
+      last.p = point.p;
+      continue;
+    }
+    raw.push(point);
+  }
+  if (raw.length < 3) return raw;
+  const out = [raw[0]];
+  for (let index = 0; index < raw.length - 1; index += 1) {
+    const p0 = raw[index - 1] ?? raw[index];
+    const p1 = raw[index];
+    const p2 = raw[index + 1];
+    const p3 = raw[index + 2] ?? p2;
+    const c1 = { x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6 };
+    const c2 = { x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6 };
+    const steps = stageClamp(Math.ceil(Math.hypot(p2.x - p1.x, p2.y - p1.y) / 1.6), 1, 18);
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps;
+      const k = 1 - t;
+      out.push({
+        x: k * k * k * p1.x + 3 * k * k * t * c1.x + 3 * k * t * t * c2.x + t * t * t * p2.x,
+        y: k * k * k * p1.y + 3 * k * k * t * c1.y + 3 * k * t * t * c2.y + t * t * t * p2.y,
+        p: p1.p + (p2.p - p1.p) * t
+      });
+    }
+  }
+  return out;
+}
+// Meia-largura por amostra: a caneta cheia segue a pressao; a faixa do marca-texto e reta.
+function stageStrokeHalfWidths(stroke, samples) {
+  const pen = stagePenId(stroke?.pen);
+  const width = Math.max(0.5, stageNum(stroke?.width, STAGE_PEN_BASE[pen]));
+  const taper = STAGE_PEN_TAPER[pen] ?? 1;
+  return samples.map((point) => Math.max(0.35, width * (taper + (1 - taper) * stageClamp(point.p, 0, 1)) / 2));
+}
+// Contorno preenchido: offset das amostras pela normal, contido pela distancia aos vizinhos
+// (nas curvas fechadas o offset cruzaria o proprio traco) e fechamento nas pontas — arco na
+// ponta redonda, reta na chanfrada.
+function stageStrokeOutline(stroke) {
+  const samples = stageStrokeSamples(stroke?.points);
+  if (!samples.length) return "";
+  const pen = stagePenId(stroke.pen);
+  const round = pen !== "marker" && pen !== "highlighter";
+  const halfs = stageStrokeHalfWidths(stroke, samples);
+  const at = (point) => `${stageRound(point.x)} ${stageRound(point.y)}`;
+  if (samples.length === 1) {
+    const radius = stageRound(halfs[0]);
+    const point = samples[0];
+    return `M ${stageRound(point.x - radius)} ${stageRound(point.y)} A ${radius} ${radius} 0 1 0 ${stageRound(point.x + radius)} ${stageRound(point.y)} A ${radius} ${radius} 0 1 0 ${stageRound(point.x - radius)} ${stageRound(point.y)} Z`;
+  }
+  const left = [];
+  const right = [];
+  for (let index = 0; index < samples.length; index += 1) {
+    const point = samples[index];
+    const previous = samples[index - 1] ?? point;
+    const next = samples[index + 1] ?? point;
+    const dx = next.x - previous.x;
+    const dy = next.y - previous.y;
+    const length = Math.hypot(dx, dy);
+    const tx = length ? dx / length : 1;
+    const ty = length ? dy / length : 0;
+    const room = Math.min(
+      Math.hypot(point.x - previous.x, point.y - previous.y) || Infinity,
+      Math.hypot(next.x - point.x, next.y - point.y) || Infinity
+    );
+    const half = Math.max(0.3, Math.min(halfs[index], Math.max(room, 0.6)));
+    left.push({ x: point.x - ty * half, y: point.y + tx * half });
+    right.push({ x: point.x + ty * half, y: point.y - tx * half });
+  }
+  const path = [`M ${at(left[0])}`];
+  for (let index = 1; index < left.length; index += 1) path.push(`L ${at(left[index])}`);
+  const tail = left[left.length - 1];
+  const head = right[0];
+  const last = right[right.length - 1];
+  if (round) {
+    const radius = stageRound(halfs[halfs.length - 1]);
+    path.push(`A ${radius} ${radius} 0 0 0 ${at(last)}`);
+  } else {
+    path.push(`L ${at(last)}`);
+  }
+  for (let index = right.length - 1; index >= 0; index -= 1) path.push(`L ${at(right[index])}`);
+  if (round) {
+    const radius = stageRound(halfs[0]);
+    path.push(`A ${radius} ${radius} 0 0 0 ${at(head)}`);
+  }
+  path.push("Z");
+  return path.join(" ");
+}
+function stagePointSegment(point, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length2 = dx * dx + dy * dy;
+  if (!length2) return Math.hypot(point.x - a.x, point.y - a.y);
+  const t = stageClamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / length2, 0, 1);
+  return Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+}
+// Distancia do ponteiro ao contorno do traco (a borracha apaga o traco inteiro que ela toca).
+function stageStrokeDistance(stroke, point) {
+  const samples = stageStrokeSamples(stroke?.points);
+  if (!samples.length) return Infinity;
+  const halfs = stageStrokeHalfWidths(stroke, samples);
+  if (samples.length === 1) return Math.max(0, Math.hypot(point.x - samples[0].x, point.y - samples[0].y) - halfs[0]);
+  let best = Infinity;
+  for (let index = 0; index < samples.length - 1; index += 1) {
+    const distance = stagePointSegment(point, samples[index], samples[index + 1]) - Math.max(halfs[index], halfs[index + 1]);
+    if (distance < best) best = distance;
+    if (best <= 0) return 0;
+  }
+  return best;
+}
+function stageStrokeBox(stroke) {
+  let box = null;
+  for (const point of stageStrokeSamples(stroke?.points)) box = stageUnionBox(box, { x: point.x, y: point.y, width: 0, height: 0 });
+  return box;
+}
+// Grao do lapis: ruido deterministico pelo seed do traco (mesmo desenho na tela e no export).
+function stageGrainFilter(id, seed) {
+  return `<filter id="${stageEscape(id)}" x="-8%" y="-8%" width="116%" height="116%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="${seed}" result="grain"/><feDisplacementMap in="SourceGraphic" in2="grain" scale="1.6" xChannelSelector="R" yChannelSelector="G"/></filter>`;
+}
+// Desenho dos tracos: contorno preenchido por traco, com o filtro do lapis no <defs> (o SVG
+// exportado e serializado fora do documento, entao tudo o que ele precisa viaja junto).
+function renderStrokesSvg(strokes, options = {}) {
+  const list = (Array.isArray(strokes) ? strokes : []).filter((stroke) => stroke && typeof stroke === "object" && stroke.id);
+  if (!list.length) return "";
+  const paint = options.paint ?? stagePaint();
+  const prefix = options.idPrefix ?? "stage";
+  const defs = [];
+  const body = [];
+  for (const stroke of list) {
+    const d = stageStrokeOutline(stroke);
+    if (!d) continue;
+    const pen = stagePenId(stroke.pen);
+    const opacity = stageClamp(stageNum(stroke.opacity, STAGE_PEN_OPACITY[pen]), 0.05, 1);
+    const attributes = [
+      `class="stage-stroke"`,
+      `data-id="${stageEscape(stroke.id)}"`,
+      `data-pen="${pen}"`,
+      `d="${d}"`,
+      `fill="${paint.color(stageInkColor(stroke.color))}"`,
+      `fill-opacity="${stageRound(opacity)}"`
+    ];
+    if (pen === "marker" || pen === "highlighter") attributes.push(`style="mix-blend-mode:multiply"`);
+    if (pen === "pencil") {
+      const filter = `${prefix}-grain-${stageSeed(stroke.seed)}`;
+      defs.push(stageGrainFilter(filter, stageSeed(stroke.seed)));
+      attributes.push(`filter="url(#${filter})"`);
+    }
+    body.push(`<path ${attributes.join(" ")}/>`);
+  }
+  const head = defs.length ? `<defs>${defs.join("")}</defs>` : "";
+  return head + body.join("");
+}
+// ------------------------------------------------------------------- papel (fatia 6a)
+function stagePaperSettings(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const size = Object.prototype.hasOwnProperty.call(STAGE_PAPER_SIZES, source.size) || source.size === "free" ? source.size : "free";
+  const grid = STAGE_PAPER_GRIDS.some((entry) => entry.value === source.grid) ? source.grid : "none";
+  const background = STAGE_PAPER_BACKGROUNDS.includes(source.background) ? source.background : "surface";
+  return { size, grid, background };
+}
+function stageEmptyDrawing() {
+  return { version: DRAWING_VERSION, paper: stagePaperSettings(null), strokes: [] };
+}
+function stageSanitizeDrawing(raw) {
+  const source = raw && typeof raw === "object" && Number(raw.version) === DRAWING_VERSION ? raw : null;
+  const drawing = stageEmptyDrawing();
+  drawing.paper = stagePaperSettings(source?.paper);
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of Array.isArray(source?.strokes) ? source.strokes : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const points = (Array.isArray(entry.points) ? entry.points : []).flatMap((point) => Array.isArray(point) && point.length >= 2
+      ? [[stageRound(stageNum(point[0], 0)), stageRound(stageNum(point[1], 0)), stageRound(stageClamp(stageNum(point[2], 0.5), 0.02, 1))]]
+      : []);
+    if (!points.length) continue;
+    const pen = stagePenId(entry.pen);
+    const id = typeof entry.id === "string" && entry.id && !seen.has(entry.id) ? entry.id : stageUid("s");
+    if (seen.has(id)) continue;
+    seen.add(id);
+    drawing.strokes.push({
+      id,
+      pen,
+      color: stageInkColor(entry.color),
+      width: stageRound(stageClamp(stageNum(entry.width, STAGE_PEN_BASE[pen]), 0.5, 160)),
+      opacity: stageRound(stageClamp(stageNum(entry.opacity, STAGE_PEN_OPACITY[pen]), 0.05, 1)),
+      seed: stageSeed(entry.seed) || stageRandomSeed(),
+      points
+    });
+  }
+  return drawing;
+}
+function stageDrawingBox(drawing) {
+  let box = null;
+  for (const stroke of drawing?.strokes ?? []) box = stageUnionBox(box, stageStrokeBox(stroke));
+  return box;
+}
+// Caixa do papel: tamanho fixo quando ha um modelo; no "livre" ela cresce em volta do
+// desenho (tracos e anotacoes), que e o unico jeito de a prancheta nao ter borda fixa.
+function stagePaperBox(drawing, items) {
+  const size = STAGE_PAPER_SIZES[stagePaperSettings(drawing?.paper).size];
+  if (size) return { x: 0, y: 0, width: size.width, height: size.height };
+  const own = stageUnionBox(stageDrawingBox(drawing), stageItemsBox(items ?? []));
+  if (!own) return { x: 0, y: 0, width: STAGE_PAPER_FREE.width, height: STAGE_PAPER_FREE.height };
+  const x = Math.floor((own.x - STAGE_PAPER_MARGIN) / STAGE_GRID) * STAGE_GRID;
+  const y = Math.floor((own.y - STAGE_PAPER_MARGIN) / STAGE_GRID) * STAGE_GRID;
+  const right = Math.ceil((own.x + own.width + STAGE_PAPER_MARGIN) / STAGE_GRID) * STAGE_GRID;
+  const bottom = Math.ceil((own.y + own.height + STAGE_PAPER_MARGIN) / STAGE_GRID) * STAGE_GRID;
+  return {
+    x,
+    y,
+    width: Math.max(right - x, STAGE_PAPER_MIN_SIDE),
+    height: Math.max(bottom - y, STAGE_PAPER_MIN_SIDE)
+  };
+}
+// Guia de trabalho: grade, pontos ou pauta. Fica fora do export de proposito — e pauta de
+// mesa, nao desenho.
+function stagePaperGuide(box, grid, paint) {
+  const step = STAGE_PAPER_STEP[grid] ?? 0;
+  if (!step) return "";
+  const left = box.x;
+  const top = box.y;
+  const right = box.x + box.width;
+  const bottom = box.y + box.height;
+  const parts = [];
+  if (grid === "dots") {
+    const stepX = Math.max(step, box.width / STAGE_PAPER_MAX_DOTS);
+    const stepY = Math.max(step, box.height / STAGE_PAPER_MAX_DOTS);
+    for (let x = left + stepX; x < right; x += stepX) {
+      for (let y = top + stepY; y < bottom; y += stepY) parts.push(`<circle cx="${stageRound(x)}" cy="${stageRound(y)}" r="1"/>`);
+    }
+    return `<g class="stage-paper-guide" data-guide="dots" fill="${paint.color("border")}" opacity="0.5">${parts.join("")}</g>`;
+  }
+  const stepX = Math.max(step, box.width / STAGE_PAPER_MAX_LINES);
+  const stepY = Math.max(step, box.height / STAGE_PAPER_MAX_LINES);
+  if (grid !== "ruled") {
+    for (let x = left + stepX; x < right; x += stepX) parts.push(`<line x1="${stageRound(x)}" y1="${stageRound(top)}" x2="${stageRound(x)}" y2="${stageRound(bottom)}"/>`);
+  }
+  for (let y = top + stepY; y < bottom; y += stepY) parts.push(`<line x1="${stageRound(left)}" y1="${stageRound(y)}" x2="${stageRound(right)}" y2="${stageRound(y)}"/>`);
+  if (grid === "ruled") {
+    parts.push(`<line x1="${stageRound(left + STAGE_PAPER_RULED_MARGIN)}" y1="${stageRound(top)}" x2="${stageRound(left + STAGE_PAPER_RULED_MARGIN)}" y2="${stageRound(bottom)}" stroke="${paint.color("accent")}" opacity="0.6"/>`);
+  }
+  return `<g class="stage-paper-guide" data-guide="${grid}" stroke="${paint.color("border")}" stroke-width="1" opacity="0.45">${parts.join("")}</g>`;
+}
+// Folha do palco: o fundo de cor sai no export; a grade/pauta so aparece na tela.
+function renderPaperSvg(drawing, options = {}) {
+  const paper = stagePaperSettings(drawing?.paper);
+  const paint = options.paint ?? stagePaint();
+  const box = options.box ?? stagePaperBox(drawing, options.items);
+  const fill = paper.background === "none" ? "none" : paint.color(paper.background);
+  const sheet = `<rect class="stage-paper" x="${stageRound(box.x)}" y="${stageRound(box.y)}" width="${stageRound(box.width)}" height="${stageRound(box.height)}" rx="2" fill="${fill}" stroke="${paint.color("border")}" stroke-width="1"/>`;
+  return sheet + (options.guide ? stagePaperGuide(box, paper.grid, paint) : "");
+}
 function stageSvgEl(tag, attributes) {
   const element = document.createElementNS(STAGE_NS, tag);
   for (const [key, value] of Object.entries(attributes)) {
@@ -21857,8 +22217,19 @@ function createStage(options) {
   let selection = /* @__PURE__ */ new Set();
   let tool = { kind: "select" };
   let enabled = false;
-  // Palco servido: "mind" tem svg proprio; "org" desenha dentro do svg do app.
+  // Modo servido: "mind" tem svg proprio; "org" desenha dentro do svg do app; em "draw" a
+  // camada e o proprio palco (nao ha arvore) e ela passa a ser dona da vista.
   let mode = "mind";
+  // Documento de desenho (chave `drawing` do arquivo) e a vista propria do modo desenho.
+  let drawing = stageEmptyDrawing();
+  let inkColor = STAGE_INK_COLOR;
+  let inkSize = STAGE_INK_SIZE;
+  let eraserRadius = STAGE_ERASER_RADIUS;
+  // Traco em construcao: nasce no pointerdown e so entra em drawing.strokes no fim do gesto.
+  let liveStroke = null;
+  const drawView = { scale: 1, x: 0, y: 0 };
+  let drawFitted = false;
+  let spaceHeld = false;
   let ownUndo = false;
   let pending = null;
   let gesture = null;
@@ -21887,8 +22258,9 @@ function createStage(options) {
     if (mode !== "org") return null;
     return options.getOrg?.() ?? null;
   }
-  // O passo de undo leva itens e selecao: desfazer nao pode largar a posse do teclado.
-  const snapshot = () => JSON.stringify({ items, selection: [...selection] });
+  // O passo de undo leva itens, selecao e o documento de desenho: desfazer nao pode largar a
+  // posse do teclado nem devolver meia prancheta (um traco e uma folha trocada sao o mesmo gesto).
+  const snapshot = () => JSON.stringify({ items, selection: [...selection], drawing });
   function transformOf(mindMap) {
     const transform = mindMap?.view?.getTransformData?.()?.transform ?? {};
     return {
@@ -21902,9 +22274,60 @@ function createStage(options) {
     const node = getMindMap()?.svg?.node;
     return node ? node.getBoundingClientRect() : area.getBoundingClientRect();
   }
+  // ---------------------------------------------------- vista do modo desenho
+  // Sem arvore nao ha hospede de quem herdar o transform: a camada aplica o proprio transform
+  // no <g class="stage-view">, e contentPoint/screenRect passam a ler daqui (mesma porta de
+  // sempre, so a fonte muda — como foi feito para o organograma).
+  function drawRect() {
+    return layer.getBoundingClientRect();
+  }
+  function drawPoint(clientX, clientY) {
+    const rect = drawRect();
+    return {
+      x: (clientX - rect.left - drawView.x) / drawView.scale,
+      y: (clientY - rect.top - drawView.y) / drawView.scale
+    };
+  }
+  function applyDrawView() {
+    view.setAttribute("transform", `translate(${stageRound(drawView.x)} ${stageRound(drawView.y)}) scale(${stageRound(drawView.scale)})`);
+  }
+  // Roda do mouse com zoom no ponteiro: o ponto sob o cursor fica parado na tela.
+  function zoomDrawAt(clientX, clientY, factor) {
+    const scale = stageClamp(drawView.scale * factor, STAGE_DRAW_MIN_SCALE, STAGE_DRAW_MAX_SCALE);
+    if (scale === drawView.scale) return;
+    const anchor = drawPoint(clientX, clientY);
+    const rect = drawRect();
+    drawView.scale = scale;
+    drawView.x = clientX - rect.left - anchor.x * scale;
+    drawView.y = clientY - rect.top - anchor.y * scale;
+    applyDrawView();
+  }
+  function panDrawBy(dx, dy) {
+    drawView.x += dx;
+    drawView.y += dy;
+    applyDrawView();
+  }
+  // Ctrl+0 / Ajustar: a folha inteira na area util.
+  function fitPaper() {
+    const box = stagePaperBox(drawing, items);
+    const rect = drawRect();
+    if (!box.width || !box.height || !rect.width || !rect.height) return false;
+    const scale = stageClamp(
+      Math.min((rect.width - STAGE_DRAW_PADDING * 2) / box.width, (rect.height - STAGE_DRAW_PADDING * 2) / box.height),
+      STAGE_DRAW_MIN_SCALE,
+      STAGE_DRAW_MAX_SCALE
+    );
+    drawView.scale = scale;
+    drawView.x = (rect.width - box.width * scale) / 2 - box.x * scale;
+    drawView.y = (rect.height - box.height * scale) / 2 - box.y * scale;
+    drawFitted = true;
+    applyDrawView();
+    return true;
+  }
   function contentPoint(event) {
     const org = orgHost();
     if (org) return org.point(event.clientX, event.clientY);
+    if (mode === "draw") return drawPoint(event.clientX, event.clientY);
     const rect = canvasRect();
     const transform = transformOf(getMindMap());
     return { x: (event.clientX - rect.left - transform.translateX) / transform.scaleX, y: (event.clientY - rect.top - transform.translateY) / transform.scaleY };
@@ -21912,6 +22335,16 @@ function createStage(options) {
   function screenRect(box) {
     const org = orgHost();
     if (org) return org.rect(box);
+    if (mode === "draw") {
+      const rect = drawRect();
+      return {
+        left: rect.left + drawView.x + box.x * drawView.scale,
+        top: rect.top + drawView.y + box.y * drawView.scale,
+        width: box.width * drawView.scale,
+        height: box.height * drawView.scale,
+        scale: drawView.scale
+      };
+    }
     const rect = canvasRect();
     const transform = transformOf(getMindMap());
     return {
@@ -21928,7 +22361,10 @@ function createStage(options) {
   // O cache de cada fonte guarda o ultimo ponto conhecido dos nos e sustenta o conector orfao.
   const mindNodes = { cache: /* @__PURE__ */ new Map(), lookup: (id) => stageNodeBox(getMindMap(), id) };
   const orgNodes = { cache: /* @__PURE__ */ new Map(), lookup: (id) => orgHost()?.nodeBox?.(id) ?? null };
-  const nodeSource = () => mode === "org" ? orgNodes : mindNodes;
+  // No modo desenho nao existe arvore: a fonte e vazia (nada a ancorar) e o ultimo ponto
+  // conhecido do palco anterior nao vaza para a prancheta.
+  const drawNodes = { cache: /* @__PURE__ */ new Map(), lookup: () => null };
+  const nodeSource = () => mode === "org" ? orgNodes : mode === "draw" ? drawNodes : mindNodes;
   // O desenho le os nos da fonte do palco corrente, que fica ativa tambem fora do desenho
   // (o fim do gesto mede o conector, o overlay desenha o contorno). O export troca a fonte
   // pelo layout que ele mesmo calculou e devolve a do palco ao terminar.
@@ -21953,6 +22389,9 @@ function createStage(options) {
   // No da arvore sob o ponteiro por geometria: a camada fica em cima da arvore, entao um
   // hit-test por DOM bateria na propria camada. Em sobreposicao vence a menor caixa.
   function nodeUnderPoint(event) {
+    // Sem arvore, nenhum no pode estar sob o ponteiro (o smm do mapa anterior pode seguir
+    // montado, escondido, com as posicoes dele).
+    if (mode === "draw") return null;
     const point = contentPoint(event);
     let best = null;
     const consider = (id, box) => {
@@ -21978,6 +22417,18 @@ function createStage(options) {
   view.setAttribute("class", "stage-view");
   const content = document.createElementNS(STAGE_NS, "g");
   content.setAttribute("class", "stage-content");
+  // A folha, os tracos e as anotacoes sao grupos fixos do conteudo: o desenho completo passa
+  // a ser um innerHTML por grupo, e o traco vivo (que cresce a cada pointermove) atualiza so
+  // o proprio grupo em vez de redesenhar a prancheta inteira.
+  const paperGroup = document.createElementNS(STAGE_NS, "g");
+  paperGroup.setAttribute("class", "stage-paper-layer");
+  const strokeGroup = document.createElementNS(STAGE_NS, "g");
+  strokeGroup.setAttribute("class", "stage-strokes");
+  const liveGroup = document.createElementNS(STAGE_NS, "g");
+  liveGroup.setAttribute("class", "stage-strokes is-live");
+  const itemGroup = document.createElementNS(STAGE_NS, "g");
+  itemGroup.setAttribute("class", "stage-items");
+  content.append(paperGroup, strokeGroup, liveGroup, itemGroup);
   const overlay = document.createElementNS(STAGE_NS, "g");
   overlay.setAttribute("class", "stage-overlay");
   view.append(content, overlay);
@@ -21987,6 +22438,11 @@ function createStage(options) {
   function syncView() {
     // No organograma quem transforma e o proprio <g> do viewport: nao ha espelho a aplicar.
     if (orgHost()) return;
+    // No modo desenho a camada e o palco: o transform e dela, nao vem de hospede nenhum.
+    if (mode === "draw") {
+      applyDrawView();
+      return;
+    }
     const transform = transformOf(getMindMap());
     view.setAttribute("transform", `translate(${stageRound(transform.translateX)} ${stageRound(transform.translateY)}) scale(${stageRound(transform.scaleX)} ${stageRound(transform.scaleY)})`);
   }
@@ -22062,11 +22518,15 @@ function createStage(options) {
     const data = JSON.parse(snapshotText);
     items = data.items;
     selection = new Set(data.selection ?? []);
+    // O documento de desenho desfaz junto: apagar um traco e refazer a folha sao o mesmo passo.
+    if (data.drawing) drawing = data.drawing;
+    liveStroke = null;
     pending = null;
     if (notify) {
       ownUndo = true;
       onChange();
     }
+    renderLiveStroke();
     sync();
   }
   // O Ctrl+Z do palco do organograma devolve o desenho por aqui (sem reempilhar nem sujar).
@@ -22095,10 +22555,15 @@ function createStage(options) {
   // ------------------------------------------------------------------ desenho
   function renderItems() {
     stageSetNodeSource(nodeSource());
-    content.innerHTML = renderAnnotationsSvg(items, { idPrefix: "stage", paint: stagePaint() });
+    const paint = stagePaint();
+    // A folha, os tracos e as anotacoes saem do desenho unico de cada um (mesma funcao no
+    // palco ao vivo e no export): a prancheta nao tem desenho proprio paralelo.
+    paperGroup.innerHTML = renderPaperSvg(drawing, { paint, items, guide: true });
+    strokeGroup.innerHTML = renderStrokesSvg(drawing.strokes, { idPrefix: "stage", paint });
+    itemGroup.innerHTML = renderAnnotationsSvg(items, { idPrefix: "stage", paint });
     const marked = new Set(selectionLeaves().map((item) => item.id));
     const org = orgHost();
-    for (const node of content.querySelectorAll(".stage-item")) {
+    for (const node of itemGroup.querySelectorAll(".stage-item")) {
       node.classList.toggle("is-selected", marked.has(node.dataset.id));
       // Fora do #stage-layer o CSS da camada nao alcanca: o hit-test e o cursor vem inline.
       if (org) {
@@ -22107,6 +22572,10 @@ function createStage(options) {
       }
     }
     syncView();
+  }
+  // O traco em construcao cresce a cada ponto: so o grupo dele muda (a prancheta fica parada).
+  function renderLiveStroke() {
+    liveGroup.innerHTML = liveStroke ? renderStrokesSvg([liveStroke], { idPrefix: "stage-live", paint: stagePaint() }) : "";
   }
   function handlePoint(box, handle) {
     const center = stageBoxCenter(box);
@@ -22220,7 +22689,7 @@ function createStage(options) {
   const toolButtons = [];
   const groupButtons = [];
   function toolMatches(descriptor, active) {
-    return descriptor.kind === active.kind && (descriptor.shape ?? null) === (active.shape ?? null) && (descriptor.line ?? null) === (active.line ?? null) && (descriptor.marker ?? null) === (active.marker ?? null);
+    return descriptor.kind === active.kind && (descriptor.shape ?? null) === (active.shape ?? null) && (descriptor.line ?? null) === (active.line ?? null) && (descriptor.marker ?? null) === (active.marker ?? null) && (descriptor.pen ?? null) === (active.pen ?? null);
   }
   function paletteButton(className, descriptor, title, icon) {
     const button2 = el("button", className);
@@ -22229,6 +22698,7 @@ function createStage(options) {
     if (descriptor.shape) button2.dataset.shape = descriptor.shape;
     if (descriptor.line) button2.dataset.line = descriptor.line;
     if (descriptor.marker) button2.dataset.marker = descriptor.marker;
+    if (descriptor.pen) button2.dataset.pen = descriptor.pen;
     button2.title = title;
     button2.setAttribute("aria-label", title);
     button2.setAttribute("aria-pressed", "false");
@@ -22290,6 +22760,12 @@ function createStage(options) {
   }
   const selectEntry = paletteButton("stage-tool", { kind: "select" }, "Selecionar (V)", "stage-select");
   palette.append(selectEntry.button, el("span", "stage-sep"));
+  // Grupo Desenho: as quatro canetas e a borracha. Fica logo depois do Selecionar porque na
+  // prancheta ele e o grupo do dia (nos outros palcos a caneta tambem desenha).
+  palette.append(buildGroup("draw", "Desenho", "stage-pen", (flyout, group) => {
+    for (const pen of STAGE_PENS) groupItem(flyout, group, { kind: "pen", pen: pen.id }, `${pen.label} (${pen.key})`, pen.icon);
+    groupItem(flyout, group, { kind: "eraser" }, "Borracha (E)", "stage-eraser");
+  }));
   palette.append(buildGroup("geo", "Formas geométricas", "stage-rect", (flyout, group) => {
     for (const shape of STAGE_GEO_SHAPES) groupItem(flyout, group, { kind: "shape", shape: shape.id }, stageToolTitle(shape), shape.icon);
   }));
@@ -22488,6 +22964,37 @@ function createStage(options) {
       for (const item of lines) item[key] = value;
     });
   }
+  // -------------------------------------------- propriedades do desenho (fatia 6a)
+  // Cor da caneta: mesmo padrao do swatch de forma, mas a amostra vem do token resolvido (a
+  // lista do desenho e maior que a das formas e nem todo token tem regra de CSS propria).
+  function inkSwatchRow(label, tokens, read, apply) {
+    const entry = propsRow(label);
+    for (const token of tokens) {
+      const name = STAGE_TOKEN_LABELS[token] ?? token;
+      const button2 = el("button", "stage-swatch");
+      button2.type = "button";
+      button2.dataset.token = token;
+      button2.title = name;
+      button2.setAttribute("aria-label", name);
+      button2.setAttribute("aria-pressed", "false");
+      button2.addEventListener("click", () => apply(token));
+      entry.holder.append(button2);
+      entry.buttons.push({ button: button2, value: token });
+    }
+    entry.read = read;
+    entry.refresh = (paint) => {
+      if (!paint) return;
+      for (const entry2 of entry.buttons) entry2.button.style.background = paint.color(entry2.value);
+    };
+    return entry;
+  }
+  // Papel: tamanho, guia e fundo sao do documento (entram no undo e no autosave como o traco).
+  function applyPaper(patch) {
+    mutate(() => {
+      drawing.paper = { ...stagePaperSettings(drawing.paper), ...patch };
+    });
+    if (patch.size) fitPaper();
+  }
   const propRows = {
     stroke: swatchRow("Traço", () => commonOf(selectedShapes(), (item) => item.style?.stroke ?? "accent"), (token) => applyStyle({ stroke: token })),
     fill: swatchRow("Preenchimento", () => commonOf(selectedShapes(), (item) => item.style?.fill ?? "none"), (token) => applyStyle({ fill: token })),
@@ -22505,12 +23012,29 @@ function createStage(options) {
     }, applyDash),
     arrowStart: tipRow("Ponta inicial", "arrowStart"),
     arrowEnd: tipRow("Ponta final", "arrowEnd"),
-    label: labelRow()
+    label: labelRow(),
+    // Caneta na mao: cor e tamanho do traco (o tamanho grava a espessura resolvida no arquivo).
+    pen: inkSwatchRow("Cor da caneta", STAGE_INK_TOKENS, () => inkColor, (token) => {
+      inkColor = stageInkColor(token);
+      syncProps();
+    }),
+    penSize: valueRow("Espessura", STAGE_PEN_FACTORS.map((factor, index) => ({ value: index, label: STAGE_PEN_SIZES[index], title: `Espessura ${STAGE_PEN_SIZES[index]}` })), () => inkSize, (index) => {
+      inkSize = stageClamp(index, 0, STAGE_PEN_FACTORS.length - 1);
+      syncProps();
+    }),
+    // Prancheta: o papel (tamanho, guia e fundo) fica sempre a mao no modo desenho.
+    paperSize: valueRow("Papel", STAGE_PAPER_SIZE_OPTIONS, () => stagePaperSettings(drawing.paper).size, (value) => applyPaper({ size: value })),
+    paperGrid: valueRow("Guia", STAGE_PAPER_GRIDS, () => stagePaperSettings(drawing.paper).grid, (value) => applyPaper({ grid: value })),
+    paperBackground: inkSwatchRow("Fundo do papel", STAGE_PAPER_BACKGROUNDS, () => stagePaperSettings(drawing.paper).background, (token) => applyPaper({ background: token }))
   };
   area.append(props);
   function syncProps() {
     const shapes = selectedShapes();
     const lines = selectedLines();
+    // No modo desenho a prancheta abre o painel mesmo sem selecao: o papel e as canetas moram
+    // aqui (nos outros palcos toda linha de propriedade exige uma peca escolhida).
+    const draw = mode === "draw";
+    const pen = draw && tool.kind === "pen";
     const visible = {
       stroke: shapes.length > 0,
       fill: shapes.length > 0,
@@ -22519,10 +23043,16 @@ function createStage(options) {
       arrowStart: lines.length > 0,
       arrowEnd: lines.length > 0,
       // O rotulo e de um conector so: a acao abre o editor de um alvo, nao de um conjunto.
-      label: lines.length === 1 && shapes.length === 0
+      label: lines.length === 1 && shapes.length === 0,
+      pen,
+      penSize: pen,
+      paperSize: draw,
+      paperGrid: draw,
+      paperBackground: draw
     };
     // Moldura/raia (e marcador/texto) nao tem linha de propriedade: o painel nao abre vazio.
-    props.hidden = selection.size === 0 || !Object.values(visible).some(Boolean);
+    props.hidden = !Object.values(visible).some(Boolean);
+    const paint = draw ? stagePaint() : null;
     for (const [key, row] of Object.entries(propRows)) {
       row.row.hidden = !visible[key];
       const value = row.read();
@@ -22531,6 +23061,8 @@ function createStage(options) {
         if (entry.action) continue;
         entry.button.setAttribute("aria-pressed", String(value !== null && entry.value === value));
       }
+      // A amostra do token e resolvida agora: trocar de tema repinta os swatches.
+      row.refresh?.(paint);
     }
   }
   // ------------------------------------------------------------------- teclado
@@ -22551,8 +23083,14 @@ function createStage(options) {
     event.stopImmediatePropagation();
   }
   // O cursor de desenho e do palco ativo: no organograma quem cuida e o svg do app (a camada
-  // #stage-layer fica oculta la); no mapa mental quem cuida e o CSS da camada.
+  // #stage-layer fica oculta la); no mapa mental quem cuida e o CSS da camada; na prancheta o
+  // cursor e da propria camada (que virou o palco) e segue a ferramenta.
   function applyCursor() {
+    if (mode === "draw") {
+      layer.style.cursor = spaceHeld ? "grab" : tool.kind === "select" ? "default" : tool.kind === "eraser" ? "cell" : "crosshair";
+      return;
+    }
+    layer.style.cursor = "";
     options.getOrg?.()?.cursor?.(mode === "org" && tool.kind !== "select" ? "crosshair" : "");
   }
   function setTool(next) {
@@ -22602,6 +23140,12 @@ function createStage(options) {
         if (ownUndo && redo()) consume(event);
         return;
       }
+      // Ctrl+0 enquadra a folha: na prancheta nao ha arvore para "ajustar a tela".
+      if (mode === "draw" && key === "0") {
+        consume(event);
+        fitPaper();
+        return;
+      }
       if (!ownsInput()) return;
       if (lower === "a") {
         consume(event);
@@ -22631,6 +23175,34 @@ function createStage(options) {
       }
       return;
     }
+    // Na prancheta P/B/M/H/E sao das canetas e da borracha. As teclas de marcador do palco
+    // seguem valendo no mapa mental e no organograma — o mesmo P nao e duas coisas ao mesmo
+    // tempo, porque a tecla e resolvida pelo modo em que o palco esta.
+    if (mode === "draw" && !event.altKey) {
+      const penId = STAGE_DRAW_KEYS[lower];
+      if (penId) {
+        consume(event);
+        applyToolKey(penId);
+        return;
+      }
+      if (key === "[" || key === "{") {
+        consume(event);
+        stepInkSize(-1);
+        return;
+      }
+      if (key === "]" || key === "}") {
+        consume(event);
+        stepInkSize(1);
+        return;
+      }
+      // Espaco segurado da pan temporario a qualquer ferramenta de desenho.
+      if (event.key === " " && !editingText()) {
+        spaceHeld = true;
+        applyCursor();
+        consume(event);
+        return;
+      }
+    }
     // Escolher ferramenta nao pode depender de posse: a posse exige selecao ou ferramenta != select,
     // entao sem isto nao haveria como entrar (nem sair) de uma ferramenta pelo teclado.
     const toolId = STAGE_TOOL_KEYS[lower];
@@ -22658,7 +23230,24 @@ function createStage(options) {
       return;
     }
   }
+  // [ e ] mudam a espessura da caneta ativa (e o raio da borracha, quando ela esta na mao).
+  function stepInkSize(delta) {
+    if (tool.kind === "eraser") {
+      eraserRadius = stageClamp(eraserRadius + delta * 4, 4, 90);
+      return;
+    }
+    inkSize = stageClamp(inkSize + delta, 0, STAGE_PEN_FACTORS.length - 1);
+    syncProps();
+  }
   function applyToolKey(toolId) {
+    if (STAGE_PEN_IDS.includes(toolId)) {
+      setTool({ kind: "pen", pen: toolId });
+      return;
+    }
+    if (toolId === "eraser") {
+      setTool({ kind: "eraser" });
+      return;
+    }
     if (toolId === "select") {
       setTool({ kind: "select" });
       return;
@@ -22855,8 +23444,12 @@ function createStage(options) {
     if (active) {
       if (active.kind === "create" || active.kind === "link") items = items.filter((item) => item.id !== active.item.id);
       else if (active.startItems) items = active.startItems;
+      else if (active.kind === "erase") drawing.strokes = active.start;
+      else if (active.kind === "ink") liveStroke = null;
       if (active.kind === "create" || active.kind === "link") selection = /* @__PURE__ */ new Set();
     }
+    renderLiveStroke();
+    applyCursor();
     sync();
   }
   function itemUnderPointer(event, exclude) {
@@ -23760,6 +24353,153 @@ function createStage(options) {
     }
     startCreate(event);
   }
+  // ------------------------------------------- gestos de desenho a mao livre (fatia 6a)
+  // O desenho nasce no pointerdown com captura: enquanto a caneta esta na mao o ponteiro e
+  // dela (a camada nao divide o gesto com o palco — nao ha pan nem selecao por baixo do traco).
+  function bindPointerDrag(pointerId, onMove, onEnd) {
+    const move = (event) => {
+      if (event.pointerId === pointerId) onMove(event);
+    };
+    const stop = (event) => {
+      if (event.pointerId !== pointerId) return;
+      layer.removeEventListener("pointermove", move, true);
+      layer.removeEventListener("pointerup", stop, true);
+      layer.removeEventListener("pointercancel", stop, true);
+      onEnd(event);
+    };
+    layer.addEventListener("pointermove", move, true);
+    layer.addEventListener("pointerup", stop, true);
+    layer.addEventListener("pointercancel", stop, true);
+  }
+  function capturePointer(event) {
+    layer.setPointerCapture?.(event.pointerId);
+  }
+  // Pressao normalizada: o stylus informa a dele; o mouse nao, entao a velocidade do gesto
+  // vira pressao (traco rapido afina) com suavizacao para a espessura nao tremer ponto a ponto.
+  function strokePressure(event, point) {
+    if (event.pointerType === "pen" && stageNum(event.pressure, 0) > 0) return stageClamp(stageNum(event.pressure, 0.5), 0.02, 1);
+    const stamp = event.timeStamp || performance.now();
+    const last = liveStroke?.points[liveStroke.points.length - 1];
+    const previous = gesture?.at ?? stamp;
+    const dt = Math.max(1, stamp - previous);
+    const speed = last ? Math.hypot(point.x - last[0], point.y - last[1]) / dt : 0;
+    const raw = stageClamp(1 - speed / STAGE_PEN_SPEED_REF, 0.25, 1);
+    const before = last ? last[2] : raw;
+    return stageClamp(before + (raw - before) * STAGE_PEN_SMOOTH, 0.02, 1);
+  }
+  function pushStrokePoint(event, point, first) {
+    if (!liveStroke) return;
+    const last = liveStroke.points[liveStroke.points.length - 1];
+    // O ponto so entra se andou o bastante: a pressao e a curva nao ganham com ruido de 1px.
+    if (!first && last && Math.hypot(point.x - last[0], point.y - last[1]) < STAGE_PEN_MIN_STEP) return;
+    liveStroke.points.push([stageRound(point.x), stageRound(point.y), stageRound(strokePressure(event, point))]);
+    if (gesture) gesture.at = event.timeStamp || performance.now();
+  }
+  function startInk(event) {
+    claimPointer(event);
+    capturePointer(event);
+    const pen = stagePenId(tool.pen);
+    const point = contentPoint(event);
+    // Desenhar nao seleciona: a prancheta nao fica com uma forma acesa por causa do traco.
+    setSelection([]);
+    begin();
+    liveStroke = {
+      id: stageUid("s"),
+      pen,
+      color: stageInkColor(tool.color ?? inkColor),
+      width: stagePenWidth(pen, inkSize),
+      opacity: STAGE_PEN_OPACITY[pen],
+      seed: stageRandomSeed(),
+      points: []
+    };
+    gesture = { kind: "ink", at: event.timeStamp || performance.now() };
+    pushStrokePoint(event, point, true);
+    renderLiveStroke();
+    bindPointerDrag(event.pointerId, (moveEvent) => {
+      pushStrokePoint(moveEvent, contentPoint(moveEvent), false);
+      renderLiveStroke();
+    }, finishInk);
+  }
+  // O traco so entra no documento no fim do gesto: o passo de undo e o traco inteiro.
+  function finishInk() {
+    const stroke = liveStroke;
+    liveStroke = null;
+    gesture = null;
+    if (stroke?.points.length) drawing.strokes.push(stroke);
+    commit();
+    renderLiveStroke();
+    sync();
+  }
+  function startErase(event) {
+    claimPointer(event);
+    capturePointer(event);
+    begin();
+    gesture = { kind: "erase", removed: 0, start: [...drawing.strokes] };
+    eraseAt(event);
+    bindPointerDrag(event.pointerId, eraseAt, finishErase);
+  }
+  // Borracha: apaga o traco INTEIRO que o ponteiro toca (o mais proximo dentro do raio do
+  // contorno). Um gesto inteiro continua sendo um passo de undo.
+  function eraseAt(event) {
+    const point = contentPoint(event);
+    let best = null;
+    let bestDistance = Infinity;
+    for (const stroke of drawing.strokes) {
+      const distance = stageStrokeDistance(stroke, point);
+      if (distance <= eraserRadius && distance < bestDistance) {
+        bestDistance = distance;
+        best = stroke;
+      }
+    }
+    if (!best) return;
+    drawing.strokes = drawing.strokes.filter((stroke) => stroke !== best);
+    gesture.removed += 1;
+    renderItems();
+  }
+  function finishErase() {
+    const removed = gesture?.removed ?? 0;
+    gesture = null;
+    if (!removed) {
+      pending = null;
+      return;
+    }
+    commit();
+    sync();
+  }
+  // Pan da prancheta: Espaco segurado ou botao do meio arrastam a folha (a caneta perde para
+  // o pan, como em qualquer ferramenta de desenho).
+  function startPan(event) {
+    claimPointer(event);
+    capturePointer(event);
+    const origin = { x: event.clientX, y: event.clientY };
+    gesture = { kind: "pan" };
+    layer.style.cursor = "grabbing";
+    bindPointerDrag(event.pointerId, (moveEvent) => {
+      panDrawBy(moveEvent.clientX - origin.x, moveEvent.clientY - origin.y);
+      origin.x = moveEvent.clientX;
+      origin.y = moveEvent.clientY;
+    }, () => {
+      gesture = null;
+      applyCursor();
+    });
+  }
+  function onDrawPointerDown(event) {
+    if (!enabled || gesture) return;
+    const target = stageElement(event.target);
+    if (!target) return;
+    if (target.closest("#stage-tools") || target.closest("#stage-props")) return;
+    if (event.button === 1 || (event.button === 0 && spaceHeld)) {
+      startPan(event);
+      return;
+    }
+    if (event.button !== 0) return;
+    if (editBox && (target === editBox || editBox.contains(target))) return;
+    if (editBox) closeTextEdit(true);
+    if (editingText()) return;
+    if (tool.kind === "pen") startInk(event);
+    else if (tool.kind === "eraser") startErase(event);
+    // Texto, formas e selecao seguem o caminho de sempre (nascem no mousedown do palco).
+  }
   // ---------------------------------------------------------------- ciclo de vida
   function sanitizeItems(raw) {
     if (!Array.isArray(raw)) return [];
@@ -23812,9 +24552,14 @@ function createStage(options) {
     }
     return kept;
   }
-  function load(annotations) {
+  function load(annotations, nextDrawing) {
     const source = annotations && typeof annotations === "object" && Number(annotations.version) === STAGE_VERSION ? annotations.items : null;
     items = sanitizeItems(source);
+    // O documento de desenho viaja junto com as anotacoes: abrir um arquivo nunca deixa a
+    // prancheta do anterior no palco (nem um traco vivo pela metade).
+    drawing = stageSanitizeDrawing(nextDrawing);
+    liveStroke = null;
+    drawFitted = false;
     selection = /* @__PURE__ */ new Set();
     history.clear();
     // Arquivo novo, arvore nova: nenhum ultimo ponto conhecido se aproveita (ids de no sao
@@ -23832,34 +24577,48 @@ function createStage(options) {
     closeFlyouts();
     setTool({ kind: "select" });
     sync();
+    // Na prancheta o arquivo abre enquadrado (a vista e da camada, nao ha hospede para isso).
+    if (mode === "draw" && enabled) fitPaper();
+  }
+  // Modo desenho: a camada e a area util inteira do palco, entao ela recebe o ponteiro (nos
+  // outros modos so os itens recebem) e a folha entra enquadrada na primeira vez.
+  function applyDrawChrome() {
+    const active = enabled && mode === "draw";
+    layer.style.pointerEvents = active ? "auto" : "";
+    applyCursor();
+    if (active && !drawFitted) fitPaper();
   }
   // Habilita o palco ativo. No organograma a camada #stage-layer fica oculta: o desenho
   // mora dentro do svg do app, que o viewport ja transforma.
   function setEnabled(next) {
     if (next === enabled) return;
     enabled = next;
-    layer.style.display = next && mode === "mind" ? "" : "none";
+    layer.style.display = next && mode !== "org" ? "" : "none";
     palette.hidden = !next;
     if (!next) {
       closeTextEdit(false);
       closeFlyouts();
       selection = /* @__PURE__ */ new Set();
       gesture = null;
+      liveStroke = null;
       marquee = null;
       guides = [];
       overlay.replaceChildren();
+      renderLiveStroke();
       props.hidden = true;
       layer.classList.remove("is-creating", "is-marquee");
       setTool({ kind: "select" });
+      applyDrawChrome();
       return;
     }
     sync();
+    applyDrawChrome();
   }
   function setMode(next) {
     if (next === mode) return;
     mode = next;
     swallowClick = false;
-    layer.style.display = enabled && mode === "mind" ? "" : "none";
+    layer.style.display = enabled && mode !== "org" ? "" : "none";
     // No organograma o canvas fica mais estreito (painel da caixa aberto): a paleta quebra
     // linha em vez de sair da area util do palco.
     if (mode === "org") {
@@ -23869,8 +24628,17 @@ function createStage(options) {
       palette.style.flexWrap = "";
       palette.style.maxWidth = "";
     }
+    // Entrar na prancheta zera a vista (a folha entra enquadrada) e a caneta nasce na mao.
+    if (mode === "draw") {
+      drawView.scale = 1;
+      drawView.x = 0;
+      drawView.y = 0;
+      drawFitted = false;
+      setTool({ kind: "pen", pen: "ink" });
+    }
     applyCursor();
     if (enabled) sync();
+    applyDrawChrome();
   }
   // ------------------------------------------------------------ export (png/pdf)
   function adjustExportFrame(rootNode, container, list) {
@@ -23911,6 +24679,14 @@ function createStage(options) {
   // -------------------------------------------------------------------- eventos
   layer.addEventListener("wheel", (event) => {
     if (!enabled) return;
+    // Na prancheta a roda e da camada (nao ha vista de hospede para repassar): zoom no ponto
+    // do ponteiro, com a linha do trackpad virando passo proprio.
+    if (mode === "draw") {
+      event.preventDefault();
+      const step = event.deltaMode === 1 ? 0.05 : 0.0022;
+      zoomDrawAt(event.clientX, event.clientY, Math.exp(-(event.deltaY || 0) * step));
+      return;
+    }
     const svgNode = getMindMap()?.svg?.node;
     if (!svgNode) return;
     event.preventDefault();
@@ -23932,9 +24708,14 @@ function createStage(options) {
   // que acontece antes do mousedown: para o gesto da camada ter precedencia, o mesmo
   // despacho roda na captura do pointerdown (so nesse palco; o mapa mental segue no mousedown).
   area.addEventListener("pointerdown", (event) => {
-    if (mode !== "org") return;
-    swallowClick = false;
-    onAreaMouseDown(event);
+    if (mode === "org") {
+      swallowClick = false;
+      onAreaMouseDown(event);
+      return;
+    }
+    // Na prancheta a camada e o palco: o gesto de desenho nasce no mesmo ponto em que o
+    // organograma despacha o dele.
+    if (mode === "draw") onDrawPointerDown(event);
   }, true);
   // O clique que fecha o gesto nao pertence ao palco do app: sem isto a caixa sob a anotacao
   // trocaria de selecao depois de mover/redimensionar/rotacionar/criar.
@@ -23944,6 +24725,18 @@ function createStage(options) {
     event.stopPropagation();
   }, true);
   window.addEventListener("keydown", onKeyDown, true);
+  // Espaco segurado da o pan temporario da prancheta: soltar a tecla devolve o cursor da
+  // ferramenta, e a janela perder o foco nao pode deixar o pan preso.
+  window.addEventListener("keyup", (event) => {
+    if (!spaceHeld || (event.key !== " " && event.key !== "Spacebar")) return;
+    spaceHeld = false;
+    applyCursor();
+  }, true);
+  window.addEventListener("blur", () => {
+    if (!spaceHeld) return;
+    spaceHeld = false;
+    applyCursor();
+  });
   document.addEventListener("mousedown", (event) => {
     const target = stageElement(event.target);
     if (target && !target.closest(".stage-group")) closeFlyouts();
@@ -23983,6 +24776,36 @@ function createStage(options) {
   function bounds() {
     return items.length ? stageItemsBox(items) : null;
   }
+  // ------------------------------------------------- export do desenho (fatia 6a)
+  // Na prancheta nao ha handleBeingExportSvg nem buildOrgSvg no caminho: o SVG sai das mesmas
+  // funcoes de desenho da camada (folha + tracos + anotacoes) num envelope proprio com o
+  // viewBox do papel. A guia (grade/pauta) fica de fora: ela e pauta de mesa, nao desenho.
+  function sketchFrame() {
+    const box = stagePaperBox(drawing, items);
+    return {
+      x: stageRound(box.x),
+      y: stageRound(box.y),
+      width: Math.max(1, Math.ceil(box.width)),
+      height: Math.max(1, Math.ceil(box.height))
+    };
+  }
+  function sketchMarkup(idPrefix, frame) {
+    const paint = stagePaint();
+    const list = items.filter((item) => item.type !== "group");
+    return renderPaperSvg(drawing, { paint, box: frame, guide: false })
+      + renderStrokesSvg(drawing.strokes, { idPrefix, paint })
+      + renderAnnotationsSvg(list, { idPrefix, paint });
+  }
+  function sketch() {
+    const frame = sketchFrame();
+    const markup = sketchMarkup("draw-export", frame);
+    return {
+      box: frame,
+      width: frame.width,
+      height: frame.height,
+      document: `<svg xmlns="${STAGE_NS}" width="${frame.width}" height="${frame.height}" viewBox="${frame.x} ${frame.y} ${frame.width} ${frame.height}">${markup}</svg>`
+    };
+  }
   window.addEventListener("resize", syncView);
   syncPalette();
   // O organograma e quem manda no desenho: a camada entrega os ganchos que ele usa
@@ -24003,7 +24826,14 @@ function createStage(options) {
       load(null);
     },
     hasItems: () => items.length > 0,
+    hasStrokes: () => drawing.strokes.length > 0,
     getData: () => ({ version: STAGE_VERSION, items: cloneValue(items) }),
+    // Documento de desenho (chave `drawing` do arquivo): o que o autosave grava e o que o
+    // compartilhar leva. Snapshot sem a selecao: e identidade do documento, nao do palco.
+    getDrawing: () => cloneValue(drawing),
+    getSnapshot: () => JSON.stringify({ items, drawing }),
+    fitPaper,
+    sketch,
     orgMarkup,
     bounds,
     // O export do mapa mental le os nos do mapa agora: o conector ancorado sai encostado no
@@ -25250,6 +26080,12 @@ function parseSharedMap(text) {
     if (!isOrgChartData(parsed.orgchart)) throw new Error("O organograma do arquivo está inválido.");
     return { kind: "org", title, org: parsed.orgchart };
   }
+  // Documento de desenho: o template `desenho` nao tem arvore, entao a chave `drawing` no topo
+  // e o que identifica o arquivo (o mesmo formato que o app grava e o shim valida antes de gravar).
+  if (parsed.drawing !== void 0) {
+    if (!isRecord(parsed.drawing) || !Array.isArray(parsed.drawing.strokes)) throw new Error("O desenho do arquivo está inválido.");
+    return { kind: "draw", title, drawing: parsed.drawing };
+  }
   if (parsed.mindmap === void 0) return null;
   if (!hasTree(parsed.mindmap)) throw new Error("O mapa mental do arquivo está inválido.");
   return {
@@ -25257,6 +26093,14 @@ function parseSharedMap(text) {
     title,
     mindmap: isRecord(parsed.mindmap.root) ? parsed.mindmap : { root: parsed.mindmap }
   };
+}
+// Pagina do desenho: a folha que a camada ja montou (SVG com pintura inline) dentro do
+// envelope A3 do app. A unica diferenca para a pagina do organograma e a origem do SVG.
+function buildDrawPdfHtml(mapTitle, svg) {
+  const date = DATE_FORMAT.format(/* @__PURE__ */ new Date());
+  const logo = logoDataUrl.startsWith("data:image/") ? `<img class="page-logo" src="${escapeXml(logoDataUrl)}" alt="SacadaWeb - Mapas">` : "";
+  const page = `<section class="page"><div class="page-header"><div class="page-brand">${logo}<h1>${escapeXml(mapTitle)}</h1></div><span class="page-meta">${escapeXml(date)}</span></div><div class="page-chart">${svg}</div></section>`;
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${escapeXml(mapTitle)}</title><style>${STYLES}</style></head><body>${page}</body></html>`;
 }
 function commonjsRequire(path) {
   throw new Error('Could not dynamically require "' + path + '". Please configure the dynamicRequireTargets or/and ignoreDynamicRequires option of @rollup/plugin-commonjs appropriately for this require call to work.');
@@ -30864,6 +31708,7 @@ async function importFromFile(file) {
     case "lucid": {
       const shared = parseSharedMap(decode());
       if (shared?.kind === "org") return { title: shared.title ?? title, org: shared.org };
+      if (shared?.kind === "draw") return { title: shared.title ?? title, drawing: shared.drawing };
       if (shared) return { title: shared.title ?? title, mindmap: shared.mindmap };
       return { title, org: lucidToOrgChart(decode()).org };
     }
@@ -31700,7 +32545,12 @@ const PATHS = {
   "stage-lane-v": '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M3.5 13.5h17M8 9v10.5"/>',
   "stage-group": '<rect x="3.5" y="3.5" width="10" height="10" rx="1.5"/><rect x="10.5" y="10.5" width="10" height="10" rx="1.5"/>',
   "stage-front": '<path d="M3.5 8.5v12h12"/><rect x="8" y="3.5" width="12.5" height="12.5" rx="1.5"/>',
-  "stage-back": '<path d="M20.5 15.5v-12h-12"/><rect x="3.5" y="8" width="12.5" height="12.5" rx="1.5"/>'
+  "stage-back": '<path d="M20.5 15.5v-12h-12"/><rect x="3.5" y="8" width="12.5" height="12.5" rx="1.5"/>',
+  "stage-pen": '<path d="M12 3.6l7.4 13.6a1.4 1.4 0 0 1-1.2 2.1H5.8a1.4 1.4 0 0 1-1.2-2.1z"/><circle cx="12" cy="14.6" r="2.1"/><path d="M12 3.6v8.9"/>',
+  "stage-chisel": '<path d="M8.4 15.6 4.6 19.4v-4.8l10.8-10.8a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8l-5.2 5.2z"/><path d="M13.2 6.2 18 11"/>',
+  "stage-highlighter": '<path d="M3.2 20.8h6.4"/><path d="M9.6 14.6 3.2 20.8"/><path d="M14.8 3.2 20.8 9.2 12 18H6.9v-5.1z"/>',
+  "stage-eraser": '<path d="M9.6 20.4h10.8"/><path d="M6.8 17.4 3.6 14.2a1.8 1.8 0 0 1 0-2.6l8-8a1.8 1.8 0 0 1 2.6 0l4.4 4.4a1.8 1.8 0 0 1 0 2.6l-6.8 6.8a1.8 1.8 0 0 1-2.6 0z"/><path d="M7.8 6.4l9.8 9.8"/>',
+  sketch: '<path d="M3.6 18.4c2.6-6.2 4.4-3.2 5.6-8.6.9-4.2 3.4-2.2 4.6 1 1.2 3 2.8 3.2 6.6-1.2"/><path d="M3.6 21.4h16.8"/>'
 };
 function isIconName(name) {
   return name in PATHS;
@@ -33511,7 +34361,9 @@ function createNodeToolbar(editor2, onOpenNote) {
     },
     update() {
       const view = editor2.getActiveNodeView();
-      const isVisible = view !== null;
+      // A barra e do no da arvore. Na prancheta a arvore do mapa anterior pode seguir montada
+      // (escondida), entao o modo e quem decide se ha a quem pertencer.
+      const isVisible = view !== null && document.body.dataset.kind !== "draw";
       bar.hidden = !isVisible;
       plusChild.hidden = !isVisible;
       plusBelow.hidden = !isVisible || view.isRoot;
@@ -33656,11 +34508,14 @@ function parentOf(path) {
   return index === -1 ? "" : path.slice(0, index);
 }
 function isMapTemplate(value) {
-  return value === "livre" || value === "pop-sacadaweb" || value === "organograma";
+  return value === "livre" || value === "pop-sacadaweb" || value === "organograma" || value === "desenho";
 }
+// O desenho tambem nasce pronto: prancheta livre com a folha de trabalho (o arquivo do modelo
+// fica com `drawing` no topo, sem mindmap/orgchart, como manda o modelo do documento).
 function initialDataFor(template, title) {
   if (template === "pop-sacadaweb") return createPopTemplate(title);
   if (template === "organograma") return createEmptyOrgChart(title);
+  if (template === "desenho") return stageEmptyDrawing();
   return void 0;
 }
 function baseName$1(path) {
@@ -33707,8 +34562,10 @@ function toolButton(icon, action, title, onClick) {
 }
 function mapIcon(entry) {
   if (entry.conflictWith) return treeIcon("alert");
-  const icon = treeIcon(entry.template === "organograma" ? "orgchart" : "mindmap");
-  icon.title = entry.template === "organograma" ? "Organograma" : "Mapa mental";
+  const icons = { organograma: ["orgchart", "Organograma"], desenho: ["sketch", "Desenho livre"] };
+  const [name, title] = icons[entry.template] ?? ["mindmap", "Mapa mental"];
+  const icon = treeIcon(name);
+  icon.title = title;
   return icon;
 }
 function createSidebar(handlers) {
@@ -33736,7 +34593,8 @@ function createSidebar(handlers) {
         options: [
           { value: "livre", label: "Livre (mapa em branco)" },
           { value: "pop-sacadaweb", label: "POP (roteiro padrão)" },
-          { value: "organograma", label: "Organograma (áreas, cargos e pessoas)" }
+          { value: "organograma", label: "Organograma (áreas, cargos e pessoas)" },
+          { value: "desenho", label: "Desenho livre (prancheta à mão livre)" }
         ]
       },
       submit: async (value, choice) => {
@@ -34123,11 +34981,14 @@ async function saveCurrentMap() {
   if (!openMap) return;
   const { path, meta } = openMap;
   const isOrg = openKind === "org";
-  const snapshot = isOrg ? orgView.getSnapshot() : editor.getSnapshot();
+  const isDraw = openKind === "draw";
+  const snapshot = isDraw ? stage.getSnapshot() : isOrg ? orgView.getSnapshot() : editor.getSnapshot();
   const file = {
     version: MAP_FILE_VERSION,
     meta: { ...meta, updatedAt: (/* @__PURE__ */ new Date()).toISOString() },
-    ...isOrg ? { orgchart: orgView.getData() } : { mindmap: editor.getData() }
+    // O documento de desenho tem chave propria no topo e nao tem arvore: o arquivo do modelo
+    // sai sem mindmap e sem orgchart.
+    ...isOrg ? { orgchart: orgView.getData() } : isDraw ? { drawing: stage.getDrawing() } : { mindmap: editor.getData() }
   };
   // O desenho do palco mora no topo do arquivo; some quando nao ha itens.
   if (stage.hasItems()) file.annotations = stage.getData();
@@ -34174,19 +35035,31 @@ async function flushSafely() {
 function setMapControlsEnabled(enabled) {
   for (const id of MAP_TOOLBAR_BUTTONS) byId(id).disabled = !enabled;
 }
+// Modo desenho: a barra perde os controles de arvore (formato, busca, minimapa, nota, Excel) e
+// os paineis laterais, que nao dizem nada sobre uma prancheta. O SVG/PDF do desenho ficam: sao
+// o export do documento. A regra de CSS so conhece os tipos "org" e "mindmap", entao o modo
+// desenho esconde o que e de arvore inline (que e o mesmo [hidden] do resto da barra).
+const KIND_KEEP_IN_DRAW = new Set(["btn-export-svg", "btn-export-pdf"]);
+function applyKindChrome(draw) {
+  for (const node of document.querySelectorAll(".mm-only, .org-only")) {
+    node.style.display = draw && !KIND_KEEP_IN_DRAW.has(node.id) ? "none" : "";
+  }
+}
 function showMapArea(isOpen) {
   byId("empty-state").hidden = isOpen;
   byId("map-title").textContent = openMap?.meta.title ?? "";
   setMapControlsEnabled(isOpen);
   const isOrg = isOpen && openKind === "org";
-  document.body.dataset.kind = isOrg ? "org" : "mindmap";
-  byId("mindmap").hidden = isOrg;
+  const isDraw = isOpen && openKind === "draw";
+  document.body.dataset.kind = isDraw ? "draw" : isOrg ? "org" : "mindmap";
+  byId("mindmap").hidden = isOrg || isDraw;
   byId("orgchart").hidden = !isOrg;
-  minimap.setMapOpen(isOpen && !isOrg);
-  layoutSelect.disabled = !isOpen;
-  if (!isOpen || isOrg) nodeToolbar.hide();
-  // O palco de desenho vale nos dois palcos: a camada muda de casa, nao de regra.
-  stage.setMode(isOrg ? "org" : "mind");
+  minimap.setMapOpen(isOpen && !isOrg && !isDraw);
+  layoutSelect.disabled = !isOpen || isDraw;
+  if (!isOpen || isOrg || isDraw) nodeToolbar.hide();
+  applyKindChrome(isDraw);
+  // O palco de desenho vale nos tres modos: a camada muda de casa, nao de regra.
+  stage.setMode(isDraw ? "draw" : isOrg ? "org" : "mind");
   stage.setEnabled(isOpen);
   if (!isOpen) setSaveState("idle");
 }
@@ -34208,7 +35081,8 @@ async function openMapAt(path, options = {}) {
     return;
   }
   openMap = { path, meta: { ...file.meta, title: baseName(path) } };
-  openKind = file.meta.template === "organograma" ? "org" : "mindmap";
+  const template = file.meta.template;
+  openKind = template === "organograma" ? "org" : template === "desenho" ? "draw" : "mindmap";
   autosave.reset();
   setSaveState("saved");
   sidebar.setActive(path);
@@ -34217,6 +35091,14 @@ async function openMapAt(path, options = {}) {
     showMapArea(true);
     orgView.open(file.orgchart, config.theme);
     savedSnapshot = orgView.getSnapshot();
+    return;
+  }
+  if (openKind === "draw") {
+    // A prancheta abre sem arvore: as anotacoes continuam valendo (formas, texto, molduras) e
+    // o desenho vem junto no mesmo arquivo.
+    stage.load(file.annotations, file.drawing);
+    showMapArea(true);
+    savedSnapshot = stage.getSnapshot();
     return;
   }
   stage.load(file.annotations);
@@ -34304,6 +35186,20 @@ async function exportData(kind) {
     if (kind === "swmap") return orgView.exportShare(openMap?.meta.title ?? "Organograma");
     return kind === "csv" ? orgView.exportCsv() : orgView.exportSvg();
   }
+  // Prancheta: PNG/SVG saem do envelope da camada (folha + tracos + anotacoes, com o viewBox
+  // do papel) e o papel quadriculado fica de fora — a guia e de trabalho, nao de documento.
+  if (openKind === "draw") {
+    if (kind === "swmap") {
+      return mapToShareJson(
+        openMap?.meta.title ?? "Desenho",
+        "desenho",
+        { drawing: stage.getDrawing(), ...stage.hasItems() ? { annotations: stage.getData() } : {} },
+        /* @__PURE__ */ new Date()
+      );
+    }
+    const sketch = stage.sketch();
+    return kind === "png" ? svgToPngDataUrl(sketch.document, sketch.width, sketch.height) : sketch.document;
+  }
   if (kind === "swmap") {
     const title = openMap?.meta.title ?? "Mapa";
     return mapToShareJson(
@@ -34363,6 +35259,16 @@ async function exportOrgPdf() {
     showError(error);
   }
 }
+// PDF da prancheta: a folha sai do mesmo envelope do SVG/PNG (sem a guia de trabalho).
+async function exportDrawPdf() {
+  if (!openMap || openKind !== "draw") return;
+  try {
+    const saved = await window.api.exportPdf(openMap.meta.title, buildDrawPdfHtml(openMap.meta.title, stage.sketch().document));
+    if (saved) showToast('PDF pronto: escolha "Salvar como PDF" na janela de impressão.');
+  } catch (error) {
+    showError(error);
+  }
+}
 async function exportCurrent(kind) {
   if (!openMap) return;
   try {
@@ -34377,7 +35283,9 @@ async function importMap() {
     const file = await window.api.pickImportFile();
     if (!file) return;
     const imported = await importFromFile(file);
-    if ("org" in imported) {
+    if ("drawing" in imported) {
+      await sidebar.importIntoTarget(imported.title, "desenho", imported.drawing);
+    } else if ("org" in imported) {
       await sidebar.importIntoTarget(imported.title, "organograma", imported.org);
     } else if ("mindmap" in imported) {
       await sidebar.importIntoTarget(imported.title, "livre", imported.mindmap);
@@ -34451,14 +35359,14 @@ function bindToolbar() {
   byId("btn-search").addEventListener("click", openSearch);
   byId("btn-fit").addEventListener(
     "click",
-    () => openKind === "org" ? orgView.fit() : editor.fit()
+    () => openKind === "org" ? orgView.fit() : openKind === "draw" ? stage.fitPaper() : editor.fit()
   );
   byId("btn-org-orient").addEventListener("click", () => orgView.toggleOrientation());
   byId("btn-org-undo").addEventListener("click", () => orgView.undo());
   byId("btn-org-redo").addEventListener("click", () => orgView.redo());
   byId("btn-export-svg").addEventListener("click", () => void exportCurrent("svg"));
   byId("btn-export-csv").addEventListener("click", () => void exportCurrent("csv"));
-  byId("btn-export-pdf").addEventListener("click", () => void exportOrgPdf());
+  byId("btn-export-pdf").addEventListener("click", () => void (openKind === "draw" ? exportDrawPdf() : exportOrgPdf()));
   byId("btn-export-xlsx").addEventListener("click", () => void exportCurrent("xlsx"));
   byId("btn-export-share").addEventListener("click", () => void exportCurrent("swmap"));
   byId("btn-update-xlsx").addEventListener("click", () => void updateOrgFromExcel());

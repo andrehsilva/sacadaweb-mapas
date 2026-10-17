@@ -4,9 +4,8 @@
 
   const MAP_EXTENSION = ".swmap.json";
   const FILE_EXTENSION = ".json"; // nome do arquivo no bucket (a extensão precisa ser .json)
-  const TEMPLATES = ["livre", "pop-sacadaweb", "organograma"];
-  // Arquivo pode trazer o desenho livre; criar um desses ainda não é papel deste cliente.
-  const FILE_TEMPLATES = [...TEMPLATES, "desenho"];
+  // Modelos que o app cria e que o arquivo pode trazer (mesmo conjunto nos dois caminhos).
+  const TEMPLATES = ["livre", "pop-sacadaweb", "organograma", "desenho"];
   const MAX_MAP_BYTES = 20 * 1024 * 1024;
   const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
   const MAX_VERSIONS = 20;
@@ -193,9 +192,11 @@
   }
 
   // Desenho livre: cor e fundo são nomes curtos de token (nunca hex).
+  const DRAWING_VERSION = 1;
   const DRAWING_PENS = ["ink", "pencil", "marker", "highlighter", "charcoal", "watercolor", "neon", "spray"];
   const DRAWING_PAPER_SIZES = ["free", "a4", "a3", "square"];
   const DRAWING_PAPER_GRIDS = ["none", "grid", "dots", "ruled"];
+  const DRAWING_PAPER_DEFAULT = { size: "free", grid: "none", background: "bg" };
 
   function isFiniteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
@@ -234,10 +235,15 @@
 
   function isDrawingData(value) {
     if (!isRecord(value)) return false;
-    if (value.version !== 1) return false;
+    if (value.version !== DRAWING_VERSION) return false;
     if (!Array.isArray(value.strokes) || value.strokes.length > MAX_DRAWING_STROKES) return false;
     if (!value.strokes.every(isStroke)) return false;
     return isDrawingPaper(value.paper);
+  }
+
+  // Prancheta nova: desenho sem traço nenhum (o arquivo pode ir direto para parseMapFile).
+  function createEmptyDrawing() {
+    return { version: DRAWING_VERSION, paper: { ...DRAWING_PAPER_DEFAULT }, strokes: [] };
   }
 
   // Mesmas regras do app antigo: valida o objeto antes de gravar e ao abrir.
@@ -250,7 +256,7 @@
     if (!isRecord(meta) || typeof meta.title !== "string" || !meta.title.trim() || meta.title.length > 200) {
       throw error(BAD_FORMAT, "http");
     }
-    if (!FILE_TEMPLATES.includes(meta.template)) throw error(BAD_FORMAT, "http");
+    if (!TEMPLATES.includes(meta.template)) throw error(BAD_FORMAT, "http");
     if (meta.template === "organograma") {
       if (!isOrgChartData(file.orgchart)) throw error(BAD_ORG, "http");
     } else if (meta.template === "desenho") {
@@ -731,7 +737,9 @@
     const name = validateName(title);
     if (!TEMPLATES.includes(template)) throw error(BAD_DATA, "http");
     const isOrg = template === "organograma";
-    if (initial !== undefined && !(isOrg ? isOrgChartData(initial) : isMindNode(initial))) throw error(BAD_DATA, "http");
+    const isDraw = template === "desenho";
+    // O desenho nasce vazio: `initial` é ignorado (nada a validar aqui, o arquivo é validado no fim).
+    if (!isDraw && initial !== undefined && !(isOrg ? isOrgChartData(initial) : isMindNode(initial))) throw error(BAD_DATA, "http");
     const parent = await parentFolderOf(parentPath);
     if (siblingMap(parent ? parent.$id : null, name)) {
       throw error(`Já existe um mapa chamado "${name}" nesta pasta.`, "exists");
@@ -742,7 +750,9 @@
       meta: { title: name, createdAt: now, updatedAt: now, template },
       ...(isOrg
         ? { orgchart: initial ?? createEmptyOrgChart(name) }
-        : { mindmap: initial ?? { data: { text: name }, children: [] } })
+        : isDraw
+          ? { drawing: createEmptyDrawing() }
+          : { mindmap: initial ?? { data: { text: name }, children: [] } })
     };
     parseMapFile(file);
     const username = await editorName();

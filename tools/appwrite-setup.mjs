@@ -41,7 +41,7 @@ const tabelas = [
       {
         chave: "template",
         tipo: "enum",
-        elementos: ["livre", "pop-sacadaweb", "organograma"],
+        elementos: ["livre", "pop-sacadaweb", "organograma", "desenho"],
         obrigatoria: true,
       },
       // O Appwrite recusa valor padrão em coluna obrigatória; a revisão inicial vai no próprio registro.
@@ -123,6 +123,27 @@ async function garantirTabela(tables, tabela, permissoes) {
   const colunas = new Set(columns.map((coluna) => coluna.key));
   for (const coluna of tabela.colunas) {
     if (colunas.has(coluna.chave)) {
+      // Enum que ganhou valor novo (ex.: o template "desenho") precisa ser ampliado na instância que já existe:
+      // o Appwrite recusa gravar valor fora da lista, então manter o schema antigo quebraria a criação.
+      const atual = columns.find((item) => item.key === coluna.chave);
+      // O Appwrite reporta coluna de enum como type "string" com `elements` (e format "enum"),
+      // então a detecção é pela presença da lista, não pelo type.
+      if (coluna.tipo === "enum" && Array.isArray(atual?.elements)) {
+        const faltando = coluna.elementos.filter((valor) => !(atual.elements ?? []).includes(valor));
+        if (faltando.length > 0) {
+          await tables.updateEnumColumn({
+            databaseId: config.databaseId,
+            tableId: tabela.id,
+            key: coluna.chave,
+            elements: coluna.elementos,
+            required: coluna.obrigatoria,
+            // O SDK do servidor exige o parâmetro na chamada; null = sem valor padrão.
+            xdefault: null,
+          });
+          criados.push(`coluna ${tabela.id}.${coluna.chave} (enum ampliado: ${faltando.join(", ")})`);
+          continue;
+        }
+      }
       existentes.push(`coluna ${tabela.id}.${coluna.chave}`);
       continue;
     }
