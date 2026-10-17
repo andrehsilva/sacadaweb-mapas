@@ -11,14 +11,17 @@
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' %APPWRITE_ORIGIN%;
                frame-src 'self'"
     />
-    <!-- Config pública do Appwrite: asset gerado pelo servidor a partir do .env. -->
-    <script src="./assets/cloud-config.js"></script>
-    <!-- SDK do Appwrite (build IIFE vendorizado em assets/vendor/appwrite.js). -->
-    <script src="./assets/vendor/appwrite.js"></script>
-    <!-- Cliente da nuvem: define window.api antes do bundle e do lockup da marca. -->
-    <script src="./assets/cloud-api.js"></script>
+    <!-- O endpoint do Appwrite e configurável: o preconnect aquece DNS/TLS enquanto a página carrega,
+         tirando um RTT inteiro da primeira chamada (a CSP já libera essa origem no connect-src). -->
+    <link rel="preconnect" href="%APPWRITE_ORIGIN%" crossorigin />
+    <!-- Config pública do Appwrite: asset gerado pelo servidor a partir do .env (no-store: sempre fresca). -->
+    <script defer src="./assets/cloud-config.js"></script>
+    <!-- SDK do Appwrite: build IIFE vendorizado, com a versão no nome para poder ser cacheado para sempre. -->
+    <script defer src="./assets/vendor/appwrite-29.0.0.js"></script>
+    <!-- Cliente da nuvem: define window.api (lê o SDK no primeiro uso). -->
+    <script defer src="./assets/cloud-api.js"></script>
     <!-- Lockup da marca (data URL) publicado em globalThis.SACADAWEB_LOGO -->
-    <script src="./assets/brand.js"></script>
+    <script defer src="./assets/brand.js"></script>
     <script type="module" crossorigin src="./assets/index-CJTx-kvA.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-CoGUaDkB.css">
     <!-- Camada de design SacadaWeb (tokens + polimento); entra depois do CSS do app. -->
@@ -27,6 +30,15 @@
   </head>
 
   <body data-kind="mindmap">
+    <!-- Carregamento: cobre a casca do app até a sessão resolver, para a tela não piscar.
+         O atributo data-booted (no <html>) é escrito pelo cliente quando a sessão está decidida. -->
+    <div id="boot" role="status" aria-live="polite">
+      <span class="brand-lockup">
+        <span class="brand-word">SacadaWeb</span>
+        <span class="brand-sub">- Mapas</span>
+      </span>
+      <span class="boot-bar" aria-hidden="true"></span>
+    </div>
     <div id="app">
       <aside id="sidebar">
         <div class="sidebar-header">

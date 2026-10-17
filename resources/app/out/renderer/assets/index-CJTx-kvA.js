@@ -34577,6 +34577,14 @@ function createSidebar(handlers) {
   let selectedFolder = "";
   let dragEntry = null;
   let dropRow = null;
+  // Caminhos já aquecidos nesta sessão. O aquecimento mora no shim (linha + conteúdo) e é
+  // opcional: sem `prefetch` na versão antiga do cliente, a chamada vira no-op.
+  const warmed = /* @__PURE__ */ new Set();
+  function warmRow(path) {
+    if (warmed.has(path)) return;
+    warmed.add(path);
+    window.api.prefetch?.(path);
+  }
   function setSelectedFolder(path) {
     selectedFolder = path;
     render2();
@@ -34813,6 +34821,13 @@ function createSidebar(handlers) {
       toolButton("trash", "delete", "Excluir", () => void remove(entry))
     );
     row.append(tools);
+    // Prefetch: passar o mouse na linha (ou chegar nela pelo Tab, que foca os botões dela)
+    // aquece linha + conteúdo antes do clique. Sem await e sem catch: se a chamada falhar, o
+    // clique é quem paga o erro. `warmRow` deduplica por caminho, então nem a linha redesenhada
+    // sob o ponteiro (filtro da árvore) repete a chamada.
+    const warm = () => warmRow(entry.path);
+    row.addEventListener("mouseenter", warm);
+    row.addEventListener("focusin", warm);
     row.addEventListener("click", () => {
       selectedFolder = parentOf(entry.path);
       handlers.onOpenMap(entry.path);
@@ -34922,6 +34937,32 @@ let config;
 let openMap = null;
 let openKind = "mindmap";
 let savedSnapshot = "";
+// Abrir um mapa não é editar: no primeiro render a biblioteca expande nós e escreve `expand`
+// dentro do dado, e isso chega em `data_change`. Sem esta âncora, o ajuste vira "Alteração
+// pendente" e o autosave regrava o arquivo que acabou de ser lido (o primeiro save redundante
+// de um mapa recém-criado, medido em segundos de ida e volta). A âncora só vale até o usuário
+// encostar em alguma coisa: todo ponteiro/tecla desarma antes de qualquer edição de verdade.
+let anchorPending = false;
+for (const inputEvent of ["pointerdown", "keydown"]) {
+  window.addEventListener(inputEvent, () => {
+    anchorPending = false;
+  }, true);
+}
+function withoutExpand(value) {
+  if (Array.isArray(value)) return value.map(withoutExpand);
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) if (key !== "expand") out[key] = withoutExpand(item);
+  return out;
+}
+// Mesmo documento: mesmo layout e mesmo dado, ignorando os marcadores de expansão.
+function sameContentIgnoringExpand(next, previous) {
+  try {
+    return JSON.stringify(withoutExpand(JSON.parse(next))) === JSON.stringify(withoutExpand(JSON.parse(previous)));
+  } catch {
+    return false;
+  }
+}
 const statusEl = byId("save-status");
 const layoutSelect = byId("layout-select");
 layoutSelect.replaceChildren(...LAYOUTS.map(({ value, label }) => new Option(label, value)));
@@ -34946,7 +34987,14 @@ const orgView = createOrgView(byId("orgchart"), byId("org-panel"), {
 const editor = createEditor(byId("mindmap"), {
   onChange: () => {
     if (!openMap || openKind !== "mindmap") return;
-    if (editor.getSnapshot() === savedSnapshot) return;
+    const snapshot = editor.getSnapshot();
+    if (snapshot === savedSnapshot) return;
+    if (anchorPending && sameContentIgnoringExpand(snapshot, savedSnapshot)) {
+      // Só a vista mudou (nós expandidos pelo próprio render): o documento é o mesmo do arquivo.
+      savedSnapshot = snapshot;
+      return;
+    }
+    anchorPending = false;
     autosave.schedule();
   },
   onActiveNode: (node) => notePanel.show(node),
@@ -35104,6 +35152,9 @@ async function openMapAt(path, options = {}) {
   stage.load(file.annotations);
   editor.open(file.mindmap, config.theme);
   savedSnapshot = editor.getSnapshot();
+  // A partir daqui o mapa aberto não tem alteração nenhuma: o que a biblioteca ajustar no
+  // primeiro render (nós expandidos) reancora em vez de sujar.
+  anchorPending = true;
   layoutSelect.value = editor.getLayout();
   showMapArea(true);
   editor.resize();
@@ -35418,21 +35469,29 @@ function bindWindowClose() {
   });
 }
 async function init() {
+  // A casca entra de pé antes das idas à nuvem: o overlay #boot sai assim que a sessão está
+  // decidida (login ou mapa), não quando o primeiro mapa carrega. O finally cobre os dois
+  // caminhos — config resolvido ou getConfig falhando — e o erro que sobe para init().catch
+  // já encontra a tela liberada.
   try {
-    config = await window.api.getConfig();
-  } catch (error) {
-    // Nuvem fora do ar ou bloqueada: mostra a tela de entrada mesmo assim, para dar o que fazer
-    // (tentar de novo) em vez de deixar a casca do app sem mapa e sem login.
-    showError(error);
-    config = { theme: "dark", user: null };
+    try {
+      config = await window.api.getConfig();
+    } catch (error) {
+      // Nuvem fora do ar ou bloqueada: mostra a tela de entrada mesmo assim, para dar o que fazer
+      // (tentar de novo) em vez de deixar a casca do app sem mapa e sem login.
+      showError(error);
+      config = { theme: "dark", user: null };
+    }
+    applyTheme(config.theme);
+    initToolbar();
+    updateThemeButton();
+    bindToolbar();
+    bindShortcuts();
+    bindWindowClose();
+    showMapArea(false);
+  } finally {
+    document.documentElement.dataset.booted = "1";
   }
-  applyTheme(config.theme);
-  initToolbar();
-  updateThemeButton();
-  bindToolbar();
-  bindShortcuts();
-  bindWindowClose();
-  showMapArea(false);
   if (config.user) await enterWorkspace(config.user);
   else showLogin();
 }

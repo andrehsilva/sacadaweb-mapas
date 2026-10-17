@@ -13,8 +13,11 @@ Login e dados ficam no Appwrite self-hosted da VPS; o navegador carrega a UI e f
   pública do Appwrite (`window.SACADAWEB_CONFIG`: endpoint, project ID e ids de tabelas e buckets) em
   `/assets/cloud-config.js`, gerado a partir do `.env` — a CSP da página só deixa rodar script da própria
   origem, então a config sai como asset, não como script inline.
-- O cliente (`assets/cloud-api.js` sobre o SDK Web vendorizado em `assets/vendor/appwrite.js`) fala direto com
-  o Appwrite: Accounts para login, TablesDB para pastas, mapas e versões, Storage para o conteúdo dos arquivos.
+- O cliente (`assets/cloud-api.js` sobre o SDK Web vendorizado em `assets/vendor/appwrite-29.0.0.js`) fala
+  direto com o Appwrite: Accounts para login, TablesDB para pastas, mapas e versões, Storage para o conteúdo
+  dos arquivos. O nome do SDK carrega a versão de propósito: é o que permite servi-lo como `immutable`. Ao
+  vendorizar uma versão nova, o arquivo entra com o novo número e o `index.html` aponta para ele (o nome antigo
+  não pode ser reaproveitado, senão o cache de um ano continua valendo).
 - Não há pasta local de mapas nem banco próprio. O servidor só serve arquivos: nada de estado, e a API key
   nunca chega ao navegador. Exportações (PNG, SVG, PDF, CSV, Excel, POP) acontecem no próprio navegador.
 
@@ -171,7 +174,7 @@ tools/appwrite-user.mjs             cria e atualiza usuários
 tools/pack-brand.py                 gera os ícones e a marca (brand.js) a partir dos masters em build/
 resources/app/out/renderer/         UI (bundle, CSS, fontes)
   assets/cloud-api.js                 interface window.api sobre o Appwrite
-  assets/vendor/appwrite.js           SDK Web do Appwrite (IIFE, expõe window.Appwrite)
+  assets/vendor/appwrite-<versão>.js  SDK Web do Appwrite (IIFE, expõe window.Appwrite; nome carrega a versão)
 docker-compose.yml                  app + Caddy
 Caddyfile                           reverse proxy com HTTPS automático
 .env.example                        modelo das variáveis de ambiente

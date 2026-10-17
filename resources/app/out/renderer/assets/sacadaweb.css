@@ -1333,3 +1333,64 @@ select {
     gap: 0;
   }
 }
+
+/* ------------------------------------------------------- estado de carregamento */
+/* Cobre a casca do app enquanto a sessão é resolvida: antes disto a barra lateral e a
+   barra de ferramentas apareciam por um instante e só depois vinha o login (a "piscada"). */
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  background: var(--color-bg);
+}
+html[data-booted="1"] #boot {
+  display: none;
+}
+/* Rede de seguranca: se o cliente travar antes de decidir a sessao, o overlay sai sozinho
+   depois de 12s em vez de deixar a tela presa (css puro, sem depender do JS). */
+#boot {
+  animation: boot-give-way 0s linear 8s forwards;
+}
+@keyframes boot-give-way {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+#boot .brand-word {
+  font-size: 26px;
+}
+#boot .brand-sub {
+  font-size: 11px;
+}
+.boot-bar {
+  width: 96px;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+.boot-bar::after {
+  content: "";
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--color-accent);
+  animation: boot-slide 1.1s ease-in-out infinite;
+}
+@keyframes boot-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot-bar::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.6;
+  }
+}

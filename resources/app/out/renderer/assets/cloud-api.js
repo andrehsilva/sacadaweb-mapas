@@ -18,6 +18,8 @@
   const MIN_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
   const PAGE_SIZE = 100;
   const MAP_VERSION = 1;
+  const REFRESH_MIN_MS = 1000; // freio entre duas revalidações em segundo plano da árvore
+  const BOOT_TIMEOUT_MS = 12000; // o overlay #boot nunca fica preso além disso
 
   const MISSING_CONFIG = "Appwrite não configurado: defina APPWRITE_ENDPOINT e APPWRITE_PROJECT_ID no .env e reinicie o servidor.";
   const MISSING_SDK = "O SDK do Appwrite não carregou. Recarregue a página.";
@@ -275,7 +277,11 @@
 
   // ------------------------------------------------------------ índice e árvore ---
 
-  const revisions = new Map(); // caminho -> revisão memorizada
+  const revisions = new Map(); // caminho -> revisão do conteúdo que o cliente tem em mãos
+  const contents = new Map(); // caminho -> { rowId, fileId, revision, text, hash } do último conteúdo conhecido
+  const downloads = new Map(); // caminho -> busca em andamento (um download por caminho)
+  let localWrites = 0; // muda a cada escrita local: retrato mais velho da nuvem é descartado
+  let session = 0; // muda a cada login/logout: nada em voo de uma sessão antiga entra no cache
   const index = {
     loaded: false,
     folders: [],
@@ -291,18 +297,59 @@
     index.loaded = false;
   }
 
+  // Hash curto (FNV-1a) só para decidir "mudei ou não": o texto é conferido junto na hora de
+  // pular o upload, então nenhuma colisão faz o save deixar de gravar.
+  function shortHash(text) {
+    let hash = 0x811c9dc5;
+    for (let position = 0; position < text.length; position += 1) {
+      hash = ((hash ^ text.charCodeAt(position)) * 0x01000193) >>> 0;
+    }
+    return `${text.length}:${hash.toString(36)}`;
+  }
+
+  // Texto e revisão andam juntos: a revisão memorizada é sempre a do conteúdo que o cliente tem.
+  function rememberContents(path, row, text) {
+    const revision = Number(row.revision) || 0;
+    contents.set(path, {
+      rowId: row.$id,
+      fileId: row.dataFileId,
+      revision,
+      text,
+      hash: shortHash(text),
+      checkedAt: Date.now() // quando esta linha foi confirmada na nuvem
+    });
+    revisions.set(path, revision);
+  }
+
+  // Trocou de sessão: o que estiver em voo não entra no cache (o guarda é `session`).
+  function clearMemos() {
+    revisions.clear();
+    contents.clear();
+    session += 1;
+  }
+
   function forgetPaths(prefix) {
     for (const path of [...revisions.keys()]) {
       if (path === prefix || path.startsWith(`${prefix}/`)) revisions.delete(path);
     }
+    for (const path of [...contents.keys()]) {
+      if (path === prefix || path.startsWith(`${prefix}/`)) contents.delete(path);
+    }
   }
 
-  // Renomear não muda a revisão: o que estava memorizado passa a valer no caminho novo.
-  function moveRevisions(from, to) {
+  // Renomear/mover não perde o que estava memorizado: ele passa a valer no caminho novo (o
+  // rename de mapa reescreve o conteúdo logo depois, por cima deste mesmo registro).
+  function moveMemos(from, to) {
     for (const [path, revision] of [...revisions]) {
       if (path === from || path.startsWith(`${from}/`)) {
         revisions.delete(path);
         revisions.set(`${to}${path.slice(from.length)}`, revision);
+      }
+    }
+    for (const [path, entry] of [...contents]) {
+      if (path === from || path.startsWith(`${from}/`)) {
+        contents.delete(path);
+        contents.set(`${to}${path.slice(from.length)}`, entry);
       }
     }
   }
@@ -377,28 +424,40 @@
     return list.sort(compareEntries);
   }
 
-  async function rebuild() {
+  // Uma ida e volta por tabela, em paralelo. O retrato da nuvem só entra se nenhuma escrita
+  // local cruzou a busca: senão ele é mais velho que o cache e apagaria o que acabou de ser gravado.
+  async function rebuild(force) {
     const { Appwrite } = cloud();
-    const folders = await listAllRows(config.foldersTableId, [Appwrite.Query.orderAsc("name")]);
-    const maps = await listAllRows(config.mapsTableId, [Appwrite.Query.orderAsc("name")]);
+    const began = localWrites;
+    const [folders, maps] = await Promise.all([
+      listAllRows(config.foldersTableId, [Appwrite.Query.orderAsc("name")]),
+      listAllRows(config.mapsTableId, [Appwrite.Query.orderAsc("name")])
+    ]);
+    if (!force && localWrites !== began) return false;
     index.folders = folders;
     index.maps = maps;
-    index.foldersById = new Map(folders.map((row) => [row.$id, row]));
+    reindex();
+    return true;
+  }
+
+  // Reconstrói o que é derivado (índices por id/caminho e a árvore) sem falar com a nuvem.
+  function reindex() {
+    const children = new Map();
+    index.foldersById = new Map(index.folders.map((row) => [row.$id, row]));
     index.folderPathById = new Map();
     index.foldersByPath = new Map();
     index.mapsByPath = new Map();
-    const children = new Map();
     const attach = (parentPath, entry) => {
       const list = children.get(parentPath);
       if (list) list.push(entry);
       else children.set(parentPath, [entry]);
     };
-    for (const row of folders) {
+    for (const row of index.folders) {
       const path = folderPath(row.$id);
       index.foldersByPath.set(path, row);
       attach(parentPathOf(path), { kind: "folder", name: row.name, path, children: [] });
     }
-    for (const row of maps) {
+    for (const row of index.maps) {
       const parentPath = (row.folderId ? folderPath(row.folderId) : "") || "";
       const path = parentPath ? `${parentPath}/${row.name}${MAP_EXTENSION}` : `${row.name}${MAP_EXTENSION}`;
       index.mapsByPath.set(path, row);
@@ -408,8 +467,44 @@
     index.loaded = true;
   }
 
+  let running = null; // rebuild em andamento (um por vez)
+  let refreshedAt = 0; // quando a última revalidação em segundo plano começou
+
+  function rebuildOnce() {
+    if (running) return running;
+    running = (async () => {
+      try {
+        return await rebuild();
+      } finally {
+        running = null;
+      }
+    })();
+    return running;
+  }
+
   async function ensure() {
-    if (!index.loaded) await rebuild();
+    // Uma escrita local pode descartar o retrato; na terceira tentativa ele entra de qualquer jeito.
+    for (let attempt = 0; !index.loaded; attempt += 1) {
+      if (await (attempt >= 2 ? rebuild(true) : rebuildOnce())) return;
+    }
+  }
+
+  // Stale-while-revalidate: a árvore sai do cache na hora e a nuvem confirma logo atrás.
+  function refreshTree() {
+    if (running) return running;
+    const now = Date.now();
+    if (now - refreshedAt < REFRESH_MIN_MS) return null; // freio: não metralha a nuvem
+    refreshedAt = now;
+    running = (async () => {
+      try {
+        if (!(await rebuild())) await rebuild(); // escrita local cruzou o retrato: tenta de novo
+      } catch (failed) {
+        console.error("Falha ao revalidar a árvore de mapas", failed);
+      } finally {
+        running = null;
+      }
+    })();
+    return running;
   }
 
   function entryAt(path) {
@@ -445,14 +540,37 @@
     return await freshRow(config.mapsTableId, found.row.$id);
   }
 
+  // Escrita local já confirmada pela nuvem entra no índice na hora (nada de re-listar a árvore).
+  function upsertRow(rows, row) {
+    localWrites += 1;
+    if (!index.loaded) return; // sem árvore carregada não há cache para mexer
+    const position = rows.findIndex((candidate) => candidate.$id === row.$id);
+    if (position === -1) rows.push(row);
+    else rows[position] = row;
+    reindex();
+  }
+
   function rememberMapRow(row) {
-    const position = index.maps.findIndex((candidate) => candidate.$id === row.$id);
-    if (position === -1) {
-      markStale();
-      return;
-    }
-    index.maps[position] = row;
-    index.mapsByPath.set(pathOfMap(row), row);
+    upsertRow(index.maps, row);
+  }
+
+  function rememberFolderRow(row) {
+    upsertRow(index.folders, row);
+  }
+
+  // Linha que não está mais no índice sai na hora; a poda em massa usa dropFolders.
+  function dropMapRow(rowId) {
+    localWrites += 1;
+    if (!index.loaded) return;
+    index.maps = index.maps.filter((row) => row.$id !== rowId);
+    reindex();
+  }
+
+  function dropFolders(rowIds) {
+    localWrites += 1;
+    if (!index.loaded) return;
+    index.folders = index.folders.filter((row) => !rowIds.has(row.$id));
+    reindex();
   }
 
   async function parentFolderOf(path) {
@@ -512,9 +630,9 @@
   }
 
   // Sempre um arquivo novo no bucket de mapas; o antigo vira versão (ou é apagado).
-  async function putContent(rowId, file) {
+  // Recebe o texto já serializado: quem chama reaproveita o mesmo texto para o hash e para o cache.
+  async function putContent(rowId, text) {
     const { Appwrite, storage } = cloud();
-    const text = mapText(file);
     const uploaded = await call(() => storage.createFile({
       bucketId: config.mapsBucketId,
       fileId: Appwrite.ID.unique(),
@@ -552,30 +670,32 @@
     }
   }
 
-  // O arquivo anterior continua no bucket de mapas (nada é baixado nem reenviado) e ganha
-  // uma linha em versions; freio de 5 minutos (force ignora) e poda para as 20 mais novas.
+  // O arquivo anterior continua no bucket (nada é baixado nem reenviado) e vira uma linha em
+  // versions; freio de 5 minutos (force ignora). Roda em paralelo com o updateRow; devolve false
+  // quando o freio mandou descartar — e aí o arquivo antigo só sai depois da linha gravada.
   async function keepHistory(row, previous, force) {
     const { Appwrite, tablesDB } = cloud();
-    try {
-      if (!previous.fileId) return;
-      if (!force) {
-        const latest = await newestVersion(row.$id);
-        const age = latest ? Date.now() - new Date(latest.$createdAt).getTime() : Infinity;
-        if (age < MIN_SNAPSHOT_INTERVAL_MS) {
-          await dropFile(config.mapsBucketId, previous.fileId); // freio: apaga para não vazar
-          return;
-        }
-      }
-      await call(() => tablesDB.createRow({
-        databaseId: config.databaseId,
-        tableId: config.versionsTableId,
-        rowId: Appwrite.ID.unique(),
-        data: { mapId: row.$id, dataFileId: previous.fileId, size: previous.size }
-      }));
-      await pruneVersions(row.$id);
-    } catch (failed) {
-      console.error("Falha ao guardar o histórico do mapa", row.$id, failed);
+    if (!previous.fileId) return false;
+    if (!force) {
+      const latest = await newestVersion(row.$id);
+      const age = latest ? Date.now() - new Date(latest.$createdAt).getTime() : Infinity;
+      if (age < MIN_SNAPSHOT_INTERVAL_MS) return false;
     }
+    await call(() => tablesDB.createRow({
+      databaseId: config.databaseId,
+      tableId: config.versionsTableId,
+      rowId: Appwrite.ID.unique(),
+      data: { mapId: row.$id, dataFileId: previous.fileId, size: previous.size }
+    }));
+    return true;
+  }
+
+  // Depois da linha atualizada, sem segurar a promessa do save: poda as 20 versões mais novas e,
+  // no caso do freio, apaga o arquivo que ficou sem dono. Nunca lança.
+  function settleHistory(row, previous, history) {
+    history
+      .then((kept) => (kept ? pruneVersions(row.$id) : dropFile(config.mapsBucketId, previous.fileId)))
+      .catch((failed) => console.error("Falha ao guardar o histórico do mapa", row.$id, failed));
   }
 
   async function getVersion(mapId, versionId) {
@@ -608,25 +728,30 @@
     }
     await dropFile(config.mapsBucketId, current.dataFileId);
     await dropRow(config.mapsTableId, current.$id);
-    revisions.delete(pathOfMap(current));
+    forgetPaths(pathOfMap(current));
+    dropMapRow(current.$id);
   }
 
   // ------------------------------------------------------------------ sessão ---
 
   let cachedUser = null;
+  let cachedPrefs = null;
   let userLoaded = false;
 
   function forgetUser() {
     cachedUser = null;
+    cachedPrefs = null;
     userLoaded = false;
   }
 
+  // Uma chamada só: account.get() já devolve prefs, então o boot não faz getPrefs separado.
   async function currentUser() {
     if (!userLoaded) {
       const { account } = cloud();
       const me = await call(() => account.get());
       const labels = Array.isArray(me.labels) ? me.labels : [];
       cachedUser = { username: me.name || me.email || "Usuário", role: labels.includes("admin") ? "admin" : "user" };
+      cachedPrefs = isRecord(me.prefs) ? me.prefs : null;
       userLoaded = true;
     }
     return cachedUser;
@@ -637,22 +762,32 @@
     return user ? user.username : "";
   }
 
-  async function themeOf() {
-    const { account } = cloud();
-    const prefs = await call(() => account.getPrefs());
-    return prefs && prefs.theme === "light" ? "light" : "dark";
+  // Rede de segurança: se a sessão não decidir em 12 s (nuvem fora), o overlay #boot ainda sai.
+  let bootTimer = setTimeout(() => markBooted(), BOOT_TIMEOUT_MS);
+
+  // O index.html espera isto para tirar o overlay #boot: sessão decidida, ou o prazo acima.
+  function markBooted() {
+    if (bootTimer !== null) {
+      clearTimeout(bootTimer);
+      bootTimer = null;
+    }
+    if (typeof document !== "undefined" && document.documentElement) document.documentElement.dataset.booted = "1";
   }
 
   async function getConfig() {
     cloud();
     let user = null;
     try {
-      user = await currentUser();
-    } catch (failed) {
-      if (failed.code !== "auth") throw failed;
+      try {
+        user = await currentUser();
+      } catch (failed) {
+        if (failed.code !== "auth") throw failed;
+      }
+      const theme = user && cachedPrefs && cachedPrefs.theme === "light" ? "light" : "dark";
+      return { theme, user };
+    } finally {
+      markBooted(); // mesmo com erro de rede o overlay sai: a casca do app aparece
     }
-    const theme = user ? await themeOf() : "dark";
-    return { theme, user };
   }
 
   async function login(email, password) {
@@ -664,7 +799,7 @@
       throw failed;
     }
     forgetUser();
-    revisions.clear();
+    clearMemos();
     markStale();
     return getConfig();
   }
@@ -677,7 +812,7 @@
       if (failed.code !== "auth") throw failed; // já não havia sessão
     }
     forgetUser();
-    revisions.clear();
+    clearMemos();
     markStale();
   }
 
@@ -685,23 +820,101 @@
     const { account } = cloud();
     const value = theme === "light" ? "light" : "dark";
     const prefs = await call(() => account.getPrefs());
-    await call(() => account.updatePrefs({ prefs: { ...(prefs || {}), theme: value } }));
+    const next = { ...(prefs || {}), theme: value };
+    await call(() => account.updatePrefs({ prefs: next }));
+    cachedPrefs = next; // getConfig já responde com o tema novo, sem outra ida à nuvem
     return getConfig();
   }
 
   // -------------------------------------------------------------------- mapas ---
 
   async function listMaps() {
-    await rebuild();
+    if (index.loaded) {
+      refreshTree(); // cache na hora: a árvore aparece sem esperar a nuvem e se corrige sozinha
+      return index.tree;
+    }
+    await ensure();
     return index.tree;
   }
 
+  // Linha fresca + arquivo, memorizados juntos; uma busca por caminho por vez (o hover não duplica).
+  function warm(path) {
+    const pending = downloads.get(path);
+    if (pending) return pending;
+    const began = session;
+    const work = (async () => {
+      const row = await freshMapRow(path);
+      if (!row.dataFileId) throw error(MISSING_CONTENT, "http");
+      const text = await readText(config.mapsBucketId, row.dataFileId);
+      // Sem parse aqui: quem abre o mapa sempre passa pelo parseMapFile (formato e revisão conferidos).
+      if (began === session) {
+        rememberContents(path, row, text);
+        rememberMapRow(row);
+      }
+      return text;
+    })().finally(() => downloads.delete(path));
+    downloads.set(path, work);
+    return work;
+  }
+
+  // Revalida a linha por trás de um conteúdo em cache, em segundo plano, sem segurar a leitura
+  // nem tocar no texto: enquanto o arquivo for o mesmo, o que o cliente tem em mãos vale.
+  function recheckContent(path, entry) {
+    if (downloads.has(path)) return;
+    entry.checkedAt = Date.now(); // acabou de sair uma conferência: não repete a cada abertura
+    const began = session;
+    const work = (async () => {
+      let row;
+      try {
+        row = await freshRow(config.mapsTableId, entry.rowId);
+      } catch (failed) {
+        if (failed.details.status === 404) contents.delete(path); // sumiu na nuvem
+        return;
+      }
+      if (began !== session || contents.get(path) !== entry) return; // escrita local recente venceu
+      if (!row.dataFileId) {
+        contents.delete(path);
+        revisions.delete(path);
+        return;
+      }
+      if (row.dataFileId !== entry.fileId) {
+        contents.delete(path); // arquivo novo: o texto em memória ficou velho
+        return; // a revisão memorizada fica na do conteúdo em mãos, então o saveMap acusa conflito
+      }
+      entry.revision = Number(row.revision) || 0; // mesmo arquivo: a revisão memorizada pode subir
+      revisions.set(path, entry.revision);
+      rememberMapRow(row);
+    })().catch(() => {}).finally(() => downloads.delete(path));
+    downloads.set(path, work);
+  }
+
+  // Aquece linha + conteúdo de um caminho (o bundle chama no hover da linha da árvore). Nunca
+  // lança; devolve verdadeiro quando o caminho ficou (ou já estava) quente.
+  async function prefetch(path) {
+    try {
+      const key = String(path == null ? "" : path);
+      if (!key) return false;
+      if (contents.has(key)) return true; // já quente: nenhum efeito colateral
+      await warm(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function readMap(path) {
-    const row = await freshMapRow(path);
-    if (!row.dataFileId) throw error(MISSING_CONTENT, "http");
-    const file = parseMapFile(parseJson(await readText(config.mapsBucketId, row.dataFileId)));
-    revisions.set(path, Number(row.revision) || 0);
-    return file;
+    const key = String(path == null ? "" : path);
+    const entry = contents.get(key);
+    const known = index.mapsByPath.get(key);
+    // Só serve o cache se a linha conhecida for a mesma e ainda apontar para o arquivo memorizado.
+    if (entry && (!known || (known.$id === entry.rowId && (!known.dataFileId || known.dataFileId === entry.fileId)))) {
+      // O conteúdo sai na hora; a linha se confirma atrás, no máximo uma vez por janela de freio.
+      if (Date.now() - entry.checkedAt >= REFRESH_MIN_MS) recheckContent(key, entry);
+      revisions.set(key, entry.revision); // memorizada = revisão do conteúdo que o cliente tem em mãos
+      return parseMapFile(parseJson(entry.text));
+    }
+    if (entry) contents.delete(key); // o caminho agora é de outro mapa (ou de outra escrita)
+    return parseMapFile(parseJson(await warm(key)));
   }
 
   async function saveMap(path, file, options) {
@@ -716,10 +929,18 @@
       });
     }
     parseMapFile(file);
+    const text = mapText(file);
+    const hash = shortHash(text);
+    const memo = contents.get(path);
+    // Mesmo texto do último gravado e a linha ainda apontando para ele: não há o que enviar.
+    if (memo && row.dataFileId && memo.fileId === row.dataFileId && memo.hash === hash && memo.text === text) {
+      return { revision };
+    }
     const previous = { fileId: row.dataFileId, size: Number(row.size) || 0 };
     const username = await editorName();
-    const uploaded = await putContent(row.$id, file);
+    const uploaded = await putContent(row.$id, text);
     const next = revision + 1;
+    const history = keepHistory(row, previous, force); // em paralelo com o updateRow
     const saved = await call(() => tablesDB.updateRow({
       databaseId: config.databaseId,
       tableId: config.mapsTableId,
@@ -727,8 +948,9 @@
       data: { dataFileId: uploaded.id, size: uploaded.size, revision: next, updatedByName: username }
     }));
     rememberMapRow(saved);
-    await keepHistory(row, previous, force);
+    contents.set(path, { rowId: row.$id, fileId: uploaded.id, revision: next, text, hash });
     revisions.set(path, next);
+    settleHistory(row, previous, history); // poda e arquivo antigo seguem depois, sem segurar o save
     return { revision: next };
   }
 
@@ -757,7 +979,8 @@
     parseMapFile(file);
     const username = await editorName();
     const rowId = Appwrite.ID.unique();
-    const uploaded = await putContent(rowId, file);
+    const text = mapText(file);
+    const uploaded = await putContent(rowId, text);
     const data = {
       name,
       template,
@@ -767,14 +990,17 @@
       updatedByName: username
     };
     if (parent) data.folderId = parent.$id; // coluna opcional: na raiz fica nula
-    await call(() => tablesDB.createRow({
+    const created = await call(() => tablesDB.createRow({
       databaseId: config.databaseId,
       tableId: config.mapsTableId,
       rowId,
       data
     }));
-    markStale();
-    return parentPath ? `${parentPath}/${name}${MAP_EXTENSION}` : `${name}${MAP_EXTENSION}`;
+    const path = parentPath ? `${parentPath}/${name}${MAP_EXTENSION}` : `${name}${MAP_EXTENSION}`;
+    // A própria resposta do createRow já é a linha: entra no índice sem re-listar a árvore.
+    rememberMapRow(created);
+    rememberContents(path, created, text); // abrir o mapa recém-criado sai do cache
+    return path;
   }
 
   async function createFolder(parentPath, name) {
@@ -786,13 +1012,13 @@
     }
     const data = { name: folderName };
     if (parent) data.parentId = parent.$id; // coluna opcional: na raiz fica nula
-    await call(() => tablesDB.createRow({
+    const created = await call(() => tablesDB.createRow({
       databaseId: config.databaseId,
       tableId: config.foldersTableId,
       rowId: Appwrite.ID.unique(),
       data
     }));
-    markStale();
+    rememberFolderRow(created);
     return parentPath ? `${parentPath}/${folderName}` : folderName;
   }
 
@@ -807,14 +1033,14 @@
       const parentPath = parentId ? folderPath(parentId) || "" : "";
       const target = parentPath ? `${parentPath}/${newName}` : newName;
       if (target === path) return path;
-      await call(() => tablesDB.updateRow({
+      const saved = await call(() => tablesDB.updateRow({
         databaseId: config.databaseId,
         tableId: config.foldersTableId,
         rowId: row.$id,
         data: { name: newName }
       }));
-      moveRevisions(path, target);
-      markStale();
+      moveMemos(path, target);
+      rememberFolderRow(saved); // a árvore muda na hora, sem re-listar
       return target;
     }
     const folderId = row.folderId || null;
@@ -824,22 +1050,25 @@
     if (target === path) return path;
     const data = { name: newName };
     const previousFileId = row.dataFileId;
+    let renamedText = null;
     if (previousFileId) {
       // Renomear reescreve o título dentro do arquivo, mas não cria versão.
       const content = parseMapFile(parseJson(await readText(config.mapsBucketId, previousFileId)));
-      const uploaded = await putContent(row.$id, { ...content, meta: { ...content.meta, title: newName } });
+      renamedText = mapText({ ...content, meta: { ...content.meta, title: newName } });
+      const uploaded = await putContent(row.$id, renamedText);
       data.dataFileId = uploaded.id;
       data.size = uploaded.size;
     }
-    await call(() => tablesDB.updateRow({
+    const saved = await call(() => tablesDB.updateRow({
       databaseId: config.databaseId,
       tableId: config.mapsTableId,
       rowId: row.$id,
       data
     }));
     if (data.dataFileId) await dropFile(config.mapsBucketId, previousFileId);
-    moveRevisions(path, target);
-    markStale();
+    moveMemos(path, target);
+    if (renamedText) rememberContents(target, saved, renamedText); // reabre já com o título novo
+    rememberMapRow(saved);
     return target;
   }
 
@@ -859,29 +1088,29 @@
       const parentId = row.parentId || null;
       if ((parentId ? folderPath(parentId) || "" : "") === targetPath) return path;
       if (siblingFolder(destinationId, row.name, row.$id)) throw error(DUPLICATE_NAME, "exists");
-      await call(() => tablesDB.updateRow({
+      const saved = await call(() => tablesDB.updateRow({
         databaseId: config.databaseId,
         tableId: config.foldersTableId,
         rowId: row.$id,
         data: { parentId: destinationId } // updateRow só mexe no que vai no data: para a raiz, null
       }));
       const next = targetPath ? `${targetPath}/${row.name}` : row.name;
-      moveRevisions(path, next);
-      markStale();
+      moveMemos(path, next);
+      rememberFolderRow(saved);
       return next;
     }
     const folderId = row.folderId || null;
     if ((folderId ? folderPath(folderId) || "" : "") === targetPath) return path;
     if (siblingMap(destinationId, row.name, row.$id)) throw error(DUPLICATE_NAME, "exists");
-    await call(() => tablesDB.updateRow({
+    const saved = await call(() => tablesDB.updateRow({
       databaseId: config.databaseId,
       tableId: config.mapsTableId,
       rowId: row.$id,
       data: { folderId: destinationId }
     }));
     const next = targetPath ? `${targetPath}/${row.name}${MAP_EXTENSION}` : `${row.name}${MAP_EXTENSION}`;
-    moveRevisions(path, next);
-    markStale();
+    moveMemos(path, next);
+    rememberMapRow(saved);
     return next;
   }
 
@@ -897,7 +1126,8 @@
     const copy = { ...content, meta: { ...content.meta, title: name, createdAt: now, updatedAt: now } };
     const username = await editorName();
     const rowId = Appwrite.ID.unique();
-    const uploaded = await putContent(rowId, copy);
+    const text = mapText(copy);
+    const uploaded = await putContent(rowId, text);
     const data = {
       name,
       template: copy.meta.template,
@@ -907,14 +1137,16 @@
       updatedByName: username
     };
     if (folderId) data.folderId = folderId;
-    await call(() => tablesDB.createRow({
+    const created = await call(() => tablesDB.createRow({
       databaseId: config.databaseId,
       tableId: config.mapsTableId,
       rowId,
       data
     }));
-    markStale();
-    return parentPath ? `${parentPath}/${name}${MAP_EXTENSION}` : `${name}${MAP_EXTENSION}`;
+    const target = parentPath ? `${parentPath}/${name}${MAP_EXTENSION}` : `${name}${MAP_EXTENSION}`;
+    rememberMapRow(created);
+    rememberContents(target, created, text); // a cópia abre na hora e já sabe que está igual à nuvem
+    return target;
   }
 
   function copyName(folderId, baseName) {
@@ -929,8 +1161,7 @@
     const { tablesDB } = cloud();
     const found = await findEntry(path);
     if (found.kind === "map") {
-      await removeMap(found.row);
-      markStale();
+      await removeMap(found.row); // já tira a linha do índice e esquece o conteúdo
       return null;
     }
     const folderId = found.row.$id;
@@ -939,7 +1170,7 @@
     folders.sort((left, right) => (folderPath(right.$id) || "").length - (folderPath(left.$id) || "").length);
     for (const row of folders) await dropRow(config.foldersTableId, row.$id);
     forgetPaths(path);
-    markStale();
+    dropFolders(new Set(folders.map((row) => row.$id)));
     return null;
   }
 
@@ -959,10 +1190,12 @@
     const version = await getVersion(row.$id, versionId);
     if (!version) throw error("Essa versão não existe mais.", "http");
     const content = parseMapFile(parseJson(await readText(config.mapsBucketId, version.dataFileId)));
+    const text = mapText(content);
     const previous = { fileId: row.dataFileId, size: Number(row.size) || 0 };
     const username = await editorName();
-    const uploaded = await putContent(row.$id, content);
+    const uploaded = await putContent(row.$id, text);
     const revision = (Number(row.revision) || 0) + 1;
+    const history = keepHistory(row, previous, true); // nada se perde: o estado atual vira versão
     const saved = await call(() => tablesDB.updateRow({
       databaseId: config.databaseId,
       tableId: config.mapsTableId,
@@ -970,7 +1203,8 @@
       data: { dataFileId: uploaded.id, size: uploaded.size, revision, updatedByName: username }
     }));
     rememberMapRow(saved);
-    await keepHistory(row, previous, true); // nada se perde: o estado atual vira versão
+    contents.set(path, { rowId: row.$id, fileId: uploaded.id, revision, text, hash: shortHash(text) });
+    settleHistory(row, previous, history);
     revisions.set(path, revision);
     return { revision };
   }
@@ -1067,6 +1301,7 @@
     setTheme,
     listMaps,
     readMap,
+    prefetch,
     saveMap,
     createMap,
     createFolder,

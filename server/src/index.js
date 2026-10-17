@@ -30,7 +30,23 @@ function originOf(endpoint) {
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
 
-// A config sai como asset da própria origem: a CSP da página é `script-src 'self'`, então script inline não roda.
+// Em produção os ativos ganham cache de verdade (o SDK vendorizado e o bundle têm versão/hash no nome);
+// em desenvolvimento nada é cacheado, senão editar o app fica com cara de "não pegou".
+const IS_PROD = process.env.NODE_ENV === "production";
+const CACHE = {
+  forever: "public, max-age=31536000, immutable",
+  short: "public, max-age=300, stale-while-revalidate=86400",
+  none: "no-cache"
+};
+// O nome do bundle do renderer já traz hash de conteúdo (index-<hash>.js) e o vendor traz a versão.
+const isVersioned = (fileName) => /(^|\/)vendor\//.test(fileName) || /index-[A-Za-z0-9_-]{8,}\.(js|css)$/.test(fileName);
+
+function cacheControlFor(filePath) {
+  if (!IS_PROD) return CACHE.none;
+  if (filePath.includes(`${path.sep}fonts${path.sep}`) || isVersioned(filePath)) return CACHE.forever;
+  return CACHE.short;
+}
+
 app.get("/assets/cloud-config.js", async (_request, reply) =>
   reply
     .type("application/javascript; charset=utf-8")
@@ -42,9 +58,11 @@ await app.register(fastifyStatic, {
   root: path.join(webDir, "assets"),
   prefix: "/assets/",
   index: false,
+  // O plugin sobrescreve o Cache-Control depois do setHeaders; desligar isso é o que faz a
+  // política abaixo valer de verdade (antes tudo saía como "public, max-age=0").
+  cacheControl: false,
   setHeaders(response, filePath) {
-    const isFont = filePath.includes(`${path.sep}fonts${path.sep}`);
-    response.setHeader("Cache-Control", isFont ? "public, max-age=31536000, immutable" : "no-cache");
+    response.setHeader("Cache-Control", cacheControlFor(filePath));
   }
 });
 
