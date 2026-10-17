@@ -174,11 +174,16 @@ tools/appwrite-user.mjs             cria e atualiza usuários
 tools/pack-brand.py                 gera os ícones e a marca (brand.js) a partir dos masters em build/
 resources/app/out/renderer/         UI (bundle, CSS, fontes)
   assets/cloud-api.js                 interface window.api sobre o Appwrite
+  assets/index-<hash>.js              bundle do renderer (o hash é do conteúdo)
   assets/vendor/appwrite-<versão>.js  SDK Web do Appwrite (IIFE, expõe window.Appwrite; nome carrega a versão)
 docker-compose.yml                  app + Caddy
 Caddyfile                           reverse proxy com HTTPS automático
 .env.example                        modelo das variáveis de ambiente
 ```
+
+O bundle do renderer leva o hash do conteúdo no nome justamente para poder ser servido como
+`immutable`. Trocar o conteúdo e manter o nome deixa o arquivo congelado no cache do navegador por um
+ano: ao regravar o bundle, ele entra com o hash novo e o `index.html` aponta para ele.
 
 ## App de desktop (aposentado)
 
