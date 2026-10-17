@@ -22556,9 +22556,9 @@ function createStage(options) {
   function renderItems() {
     stageSetNodeSource(nodeSource());
     const paint = stagePaint();
-    // A folha, os tracos e as anotacoes saem do desenho unico de cada um (mesma funcao no
-    // palco ao vivo e no export): a prancheta nao tem desenho proprio paralelo.
-    paperGroup.innerHTML = renderPaperSvg(drawing, { paint, items, guide: true });
+    // A folha e da prancheta: no mapa mental e no organograma o palco e a camada de anotacoes
+    // (formas, texto, molduras) e a folha por baixo tapava a arvore de um mapa recem-criado.
+    paperGroup.innerHTML = mode === "draw" ? renderPaperSvg(drawing, { paint, items, guide: true }) : "";
     strokeGroup.innerHTML = renderStrokesSvg(drawing.strokes, { idPrefix: "stage", paint });
     itemGroup.innerHTML = renderAnnotationsSvg(items, { idPrefix: "stage", paint });
     const marked = new Set(selectionLeaves().map((item) => item.id));
